@@ -5,21 +5,13 @@ import type { Ticker } from "@/lib/types";
 
 type LiveTicker = Ticker & { live?: boolean };
 
-type LeaderInfo = { name: string; color: string; changePct: number } | null;
-
 type Props = {
   initial: Ticker[];
-  leader: LeaderInfo;
-  outsider: LeaderInfo;
 };
-
-function fmtPct(v: number): string {
-  return (v > 0 ? "+" : "") + v.toFixed(1) + "%";
-}
 
 // Верхняя строка тикеров. Стартует с БД-значений (SSR), затем опрашивает
 // /api/tickers каждые 60 сек. Если запрос упал — оставляем последние известные.
-export default function TickerStrip({ initial, leader, outsider }: Props) {
+export default function TickerStrip({ initial }: Props) {
   const [tickers, setTickers] = useState<LiveTicker[]>(initial);
   const [live, setLive] = useState(false);
 
@@ -70,35 +62,13 @@ export default function TickerStrip({ initial, leader, outsider }: Props) {
           </span>
         );
       })}
-      <span className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1">
+      <span className="ml-auto flex items-center">
         <span
           className={`text-[9px] uppercase tracking-widest ${live ? "text-pos" : "text-muted/60"}`}
           title={live ? "цены обновляются автоматически" : "live-источники недоступны — значения из БД"}
         >
           {live ? "● live" : "○ бд"}
         </span>
-        {leader && (
-          <span className="flex items-center gap-1.5">
-            <span className="text-muted">Лидер:</span>
-            <span style={{ color: leader.color }} className="font-bold">
-              {leader.name}
-            </span>
-            <span className={leader.changePct > 0 ? "text-pos" : leader.changePct < 0 ? "text-neg" : "text-muted"}>
-              {fmtPct(leader.changePct)}
-            </span>
-          </span>
-        )}
-        {outsider && (
-          <span className="flex items-center gap-1.5">
-            <span className="text-muted">Аутсайдер:</span>
-            <span style={{ color: outsider.color }} className="font-bold">
-              {outsider.name}
-            </span>
-            <span className={outsider.changePct > 0 ? "text-pos" : outsider.changePct < 0 ? "text-neg" : "text-muted"}>
-              {fmtPct(outsider.changePct)}
-            </span>
-          </span>
-        )}
       </span>
     </section>
   );

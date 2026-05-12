@@ -2,7 +2,6 @@ import Link from "next/link";
 import { getCompetitionData } from "@/lib/db";
 import {
   getParticipantStats,
-  getLeaderAndOutsider,
   getLeaderboard,
   getChartData,
   formatTs,
@@ -25,7 +24,6 @@ export const revalidate = 0;
 export default async function Home() {
   const competition = await getCompetitionData();
   const stats = getParticipantStats(competition);
-  const { leader, outsider } = getLeaderAndOutsider(stats);
   const top = getLeaderboard(stats);
   const { rows } = getChartData(competition);
   const lines = competition.participants.map((p) => ({
@@ -34,13 +32,6 @@ export default async function Home() {
   }));
 
   const periodLabel = `${formatTs(competition.startDate)} — ${formatTs(competition.endDate)}`;
-
-  const leaderInfo = leader
-    ? { name: leader.name, color: leader.color, changePct: leader.changePct }
-    : null;
-  const outsiderInfo = outsider
-    ? { name: outsider.name, color: outsider.color, changePct: outsider.changePct }
-    : null;
 
   return (
     <main className="mx-auto flex min-h-full max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6">
@@ -71,11 +62,7 @@ export default async function Home() {
       <Leaderboard top={top} />
 
       {/* ─── Верхняя строка тикеров (авто-обновление через /api/tickers) ─── */}
-      <TickerStrip
-        initial={competition.tickers}
-        leader={leaderInfo}
-        outsider={outsiderInfo}
-      />
+      <TickerStrip initial={competition.tickers} />
 
       {/* ─── Интерактивная часть: фильтр + график + участники + табы ─── */}
       <DashboardShell
