@@ -66,7 +66,7 @@ function CustomTooltip({
     <div className="rounded-md border border-border bg-panel/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
       <div className="mb-1 text-muted">{formatTs(String(label))}</div>
       {payload
-        .filter((p) => p.dataKey !== "__avg" && typeof p.value === "number")
+        .filter((p) => typeof p.value === "number")
         .sort((a, b) => Number(b.value) - Number(a.value))
         .map((p) => (
           <div key={String(p.dataKey)} className="flex items-center gap-2">
@@ -80,17 +80,6 @@ function CustomTooltip({
             </span>
           </div>
         ))}
-      {payload.some((p) => p.dataKey === "__avg") && (
-        <div className="mt-1 flex items-center gap-2 border-t border-border pt-1 text-muted">
-          <span className="inline-block h-2 w-2 rounded-full bg-muted" />
-          <span>среднее</span>
-          <span className="ml-auto tabular-nums">
-            {formatMoney(
-              Number(payload.find((p) => p.dataKey === "__avg")?.value ?? 0)
-            )}
-          </span>
-        </div>
-      )}
       {mode === "equity" && (
         <div className="mt-1 border-t border-border pt-1 text-[10px] text-muted">
           equity (с открытыми сделками)
@@ -179,8 +168,8 @@ export default function EquityChart({ rows, lines, stats, onParticipantClick }: 
   }, [stats]);
 
   // режим "equity": клонируем строки и приподнимаем ПОСЛЕДНЮЮ числовую точку
-  // каждого участника на сумму его нереализованного PnL. __avg пересчитываем
-  // по equity-значениям. Исторические точки не трогаем (нет исторического floating PnL).
+  // каждого участника на сумму его нереализованного PnL.
+  // Исторические точки не трогаем (нет исторического floating PnL).
   const equityRows = useMemo<ChartRow[]>(() => {
     if (unrealizedByName.size === 0) return shownRows;
     const cloned: ChartRow[] = shownRows.map((r) => ({ ...r }));
@@ -193,21 +182,8 @@ export default function EquityChart({ rows, lines, stats, onParticipantClick }: 
         }
       }
     }
-    // пересчёт среднего по фактическим значениям участников в строке
-    for (const r of cloned) {
-      let sum = 0;
-      let count = 0;
-      for (const l of lines) {
-        const v = r[l.name];
-        if (typeof v === "number") {
-          sum += v;
-          count += 1;
-        }
-      }
-      if (count > 0) r["__avg"] = Math.round(sum / count);
-    }
     return cloned;
-  }, [shownRows, unrealizedByName, lines]);
+  }, [shownRows, unrealizedByName]);
 
   const displayRows = mode === "equity" ? equityRows : shownRows;
 
@@ -342,20 +318,6 @@ export default function EquityChart({ rows, lines, stats, onParticipantClick }: 
               domain={["auto", "auto"]}
             />
             <Tooltip content={<CustomTooltip mode={mode} />} cursor={{ stroke: "#3f3f46" }} />
-            <Line
-              type="monotone"
-              dataKey="__avg"
-              name="среднее"
-              stroke="#6b7280"
-              strokeWidth={1.5}
-              strokeDasharray="6 4"
-              strokeOpacity={highlight !== null ? 0.15 : 1}
-              dot={false}
-              activeDot={false}
-              isAnimationActive
-              animationDuration={LINE_ANIM_MS}
-              animationEasing="ease-out"
-            />
             {lines.map((l) => (
               <Line
                 key={l.name}

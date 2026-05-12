@@ -106,3 +106,7 @@
 - `npm run lint` — OK.
 - `npm run build` — OK (TypeScript OK). Маршруты: `/` ƒ, `/admin` ƒ, `/api/tickers` ○ (revalidate 5m).
 - `npm run dev` (порт 4137) — `/` → 200 (лидерборд + строка тикеров + таб «Список наблюдения» с таблицей в HTML), `/admin` → 200 («Админка не настроена», `ADMIN_PASSWORD` пуст), `/api/tickers` → 200, все 6 тикеров `live:true` (BTC/CoinGecko, EUR+GBP+JPY/Frankfurter, XAU+XAG/goldprice.org).
+
+## v7.1 — убрана ссылка «Админка» с публичной страницы (commit 4d5feaa)
+- `app/page.tsx`: удалён `<Link href="/admin">Админка</Link>` из шапки + неиспользуемый `import Link from "next/link"`. Шапка соревнования (`competition.title`, период, кол-во участников) и «Реалити-торговля · live-дашборд» остались. `/admin` доступна только по прямому URL.
+- Валидация: lint OK, build OK (`/` ƒ, `/admin` ƒ), dev → `/` 200 (нет «Админка»/`href="/admin"` в HTML), `/admin` 200. Push в main → Vercel auto-deploy (building).

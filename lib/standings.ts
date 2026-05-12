@@ -166,7 +166,6 @@ export type ChartRow = { ts: string } & Record<string, number | string>;
  * Сводит timeline всех участников (выведенный из сделок) в один массив строк для recharts.
  * Каждая строка — момент времени, ключ = имя участника → его баланс. Линии рисуются
  * с connectNulls, так что не у каждого участника нужна точка в каждой строке.
- * Дополнительно добавляет "__avg" — среднее по участникам, у кого на этот момент есть данные.
  */
 export function getChartData(competition: Competition): {
   rows: ChartRow[];
@@ -180,17 +179,10 @@ export function getChartData(competition: Competition): {
 
   const rows: ChartRow[] = allTs.map((ts) => {
     const row: ChartRow = { ts };
-    let sum = 0;
-    let count = 0;
     for (const s of stats) {
       const pt = s.timeline.find((x) => x.ts === ts);
-      if (pt) {
-        row[s.name] = pt.value;
-        sum += pt.value;
-        count += 1;
-      }
+      if (pt) row[s.name] = pt.value;
     }
-    if (count > 0) row["__avg"] = Math.round(sum / count);
     return row;
   });
 
