@@ -11,7 +11,7 @@ import {
   type ChartRow,
   type ParticipantStat,
 } from "@/lib/standings";
-import type { Position } from "@/lib/types";
+import type { Position, WatchlistItem } from "@/lib/types";
 
 type LineMeta = { name: string; color: string };
 
@@ -21,6 +21,7 @@ type Props = {
   lines: LineMeta[];
   note: string;
   rulesText: string;
+  watchlist: WatchlistItem[];
 };
 
 type TabKey = "open" | "closed" | "watchlist" | "about";
@@ -128,12 +129,49 @@ function PositionsTable({
   );
 }
 
+function WatchlistTable({ items }: { items: WatchlistItem[] }) {
+  if (items.length === 0) {
+    return (
+      <p className="py-3 text-center text-xs text-muted">
+        Список наблюдения пуст
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
+            <th className="py-1 pr-2 font-medium">Инструмент</th>
+            <th className="py-1 pr-2 font-medium">Кто присматривает</th>
+            <th className="py-1 font-medium">Комментарий</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((w, i) => (
+            <tr key={i} className="border-t border-border/60">
+              <td className="py-1.5 pr-2 font-semibold text-foreground">
+                {w.instrument}
+              </td>
+              <td className="py-1.5 pr-2 text-muted">
+                {w.participantNames.length > 0 ? w.participantNames.join(", ") : "—"}
+              </td>
+              <td className="py-1.5 text-muted">{w.note || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function DashboardShell({
   stats,
   rows,
   lines,
   note,
   rulesText,
+  watchlist,
 }: Props) {
   const allNames = useMemo(() => stats.map((s) => s.name), [stats]);
   const [selected, setSelected] = useState<string[]>(allNames);
@@ -337,8 +375,11 @@ export default function DashboardShell({
           )}
 
           {tab === "watchlist" && (
-            <div className="rounded-lg border border-border bg-panel p-6 text-center text-sm text-muted">
-              Список наблюдения — скоро
+            <div className="rounded-lg border border-border bg-panel p-3">
+              <h3 className="mb-2 text-xs font-semibold text-foreground">
+                Список наблюдения — инструменты, которые присматривают участники
+              </h3>
+              <WatchlistTable items={watchlist} />
             </div>
           )}
 

@@ -58,6 +58,14 @@ export function getLeaderAndOutsider(stats: ParticipantStat[]): {
   return { leader: sorted[0], outsider: sorted[sorted.length - 1] };
 }
 
+/**
+ * Топ-3 участника по росту % (changePct = текущий/стартовый − 1).
+ * Возвращает не более 3 элементов в порядке убывания роста.
+ */
+export function getLeaderboard(stats: ParticipantStat[]): ParticipantStat[] {
+  return [...stats].sort((a, b) => b.changePct - a.changePct).slice(0, 3);
+}
+
 export type ChartRow = { ts: string } & Record<string, number | string>;
 
 /**

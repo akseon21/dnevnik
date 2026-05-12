@@ -8,6 +8,8 @@ import {
   upsertParticipant,
   upsertTicker,
   upsertMeta,
+  addWatchlistItem,
+  deleteWatchlistItem,
   type ActionResult,
   type AdminData,
 } from "./actions";
@@ -48,6 +50,7 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
   const participants = data?.participants ?? [];
   const tickers = data?.tickers ?? [];
   const openPositions = data?.openPositions ?? [];
+  const watchlist = data?.watchlist ?? [];
   const meta = data?.meta ?? null;
 
   const [bpState, bpAction] = useFormAction(addBalancePoint);
@@ -56,6 +59,8 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
   const [pState, pAction] = useFormAction(upsertParticipant);
   const [tState, tAction] = useFormAction(upsertTicker);
   const [mState, mAction] = useFormAction(upsertMeta);
+  const [wAddState, wAddAction] = useFormAction(addWatchlistItem);
+  const [wDelState, wDelAction] = useFormAction(deleteWatchlistItem);
 
   const participantOptions = participants.map((p) => (
     <option key={p.id} value={p.id}>
@@ -259,6 +264,70 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
         <div className="mt-2">
           <Status state={tState} />
         </div>
+      </section>
+
+      {/* ── Список наблюдения ── */}
+      <section className={cardCls}>
+        <h2 className="mb-3 text-sm font-bold text-foreground">Список наблюдения</h2>
+        <form action={wAddAction} className="flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1">
+            <span className={labelCls}>Инструмент</span>
+            <input name="instrument" placeholder="XAGUSD" className={inputCls} required />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className={labelCls}>Кто присматривает (через запятую)</span>
+            <input
+              name="participant_names"
+              placeholder="Кирилл, Алексей"
+              className={inputCls + " w-64"}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className={labelCls}>Комментарий</span>
+            <input
+              name="note"
+              placeholder="ждём отбой от уровня"
+              className={inputCls + " w-64"}
+            />
+          </label>
+          <Submit label="Добавить" />
+        </form>
+        <div className="mt-2">
+          <Status state={wAddState} />
+        </div>
+
+        {watchlist.length > 0 && (
+          <div className="mt-4 border-t border-border pt-3">
+            <h3 className="mb-2 text-xs font-semibold text-muted">Текущие записи</h3>
+            <div className="flex flex-col gap-2">
+              {watchlist.map((w) => (
+                <form
+                  key={w.id}
+                  action={wDelAction}
+                  className="flex flex-wrap items-center gap-2 text-xs"
+                >
+                  <input type="hidden" name="id" value={w.id} />
+                  <span className="text-foreground">
+                    <span className="font-semibold">{w.instrument}</span>
+                    {" · "}
+                    {w.participant_names.length > 0 ? w.participant_names.join(", ") : "—"}
+                    {" · "}
+                    {w.note || "—"}
+                  </span>
+                  <button
+                    type="submit"
+                    className="rounded-md border border-border px-2.5 py-1 text-xs text-foreground hover:border-neg hover:text-neg"
+                  >
+                    Удалить
+                  </button>
+                </form>
+              ))}
+            </div>
+            <div className="mt-2">
+              <Status state={wDelState} />
+            </div>
+          </div>
+        )}
       </section>
 
       {/* ── Соревнование ── */}

@@ -79,3 +79,30 @@
 - `npm run lint` — OK.
 - `npm run build` — OK (TypeScript OK; `[db] Supabase fetch failed → falling back to static` из-за непрогнанной миграции — ожидаемо).
 - `npm run dev` (порт 4123) — `/` → 200 (статика, табы/фильтр/карточки/позиции в HTML), `/admin` → 200 («Админка не настроена», т.к. `ADMIN_PASSWORD` пуст). Ошибок в логе нет.
+
+## v3 — лидерборд + наполненный вотчлист + live-тикеры (2026-05-12)
+
+### Решения
+- **Лидерборд**: переиспользовал готовый `changePct` из `getParticipantStats` (= current/start − 1 в %) — это ровно «рост %» из задачи. Новый чистый хелпер `getLeaderboard(stats)` = sort by changePct desc, slice(0,3). Компонент `Leaderboard.tsx` — серверный (никакого client-state не нужно). Стиль — в тон тёмного терминала: панель `bg-panel`, медальки эмодзи, аватары-инициалы как в карточках.
+- **Watchlist в схеме**: `participant_names` сделал `text[]` (Postgres-массив), как просили. В `lib/types.ts` → camelCase `participantNames: string[]`. В админке имена вводятся одной строкой через запятую → split/trim/filter в server action. Seed в миграции НЕ закомментирован (в задаче «засей 2-3 placeholder-записи» — оставил активным, прогонится вместе с CREATE TABLE). Те же 3 записи продублированы в `data/competition.ts` чтобы статический fallback тоже их показывал.
+- **db.ts — устойчивость к непрогнанной миграции 0002**: watchlist-запрос идёт в том же `Promise.all`, но его ошибка НЕ роняет весь fetch (в отличие от participants/meta) — `watchlistRes.error ? [] : data`. Так дашборд с прогнанным 0001, но без 0002, просто покажет пустой вотчлист (или fallback-данные если вообще без БД), не упадёт.
+- **Live-тикеры — архитектура graceful degradation**:
+  - `app/api/tickers/route.ts` с `export const revalidate = 300` (как просили) — route стал статическим ISR (видно в build: `○ /api/tickers 5m`). Каждый внешний fetch — `next:{revalidate:300}` (синхронно с route). 4-сек таймаут на каждый источник через AbortController, любой упавший игнорируется.
+  - Не блокируем рендер дашборда: строку тикеров вынес из server-render в client-компонент `TickerStrip.tsx`. SSR отдаёт БД-значения мгновенно, клиент опрашивает `/api/tickers` каждые 60с и обновляет. Запрос упал → оставляем последнее известное (`catch {}` без сброса state).
+  - Мёрдж: для каждого тикера из БД берём live если есть (`live:true`), иначе БД-значение (`live:false`). Символы, которых нет в БД, но пришли из live — тоже добавляются.
+- **Источники (проверено вживую на dev)**:
+  - BTCUSD ← CoinGecko `simple/price` (+ `usd_24h_change`) — работает, реальный 24h change. Без ключа.
+  - EURUSD/GBPUSD/USDJPY ← Frankfurter `latest?from=USD&to=EUR,GBP,JPY` — работает. EUR/GBP = 1/rate (round 4 знака), JPY = rate напрямую (round 3). change24h = 0 — Frankfurter (reference rates ЕЦБ) не несёт внутридневное изменение; принял, что для FX показываем 0% (альтернатива — доп. запрос за вчерашней датой, отложил в v4).
+  - XAUUSD/XAGUSD ← goldprice.org `dbXRates/USD` — работает ТОЛЬКО с браузероподобными заголовками (User-Agent + Referer: goldprice.org + Origin: goldprice.org), без них — `Forbidden`. Заголовки в `BROWSERLIKE_HEADERS`. Это неофициальный эндпоинт → риск что закроется/IP Vercel забанит. Тогда graceful degradation: `live:false`, металлы из БД (ручное обновление через /admin), а для нормального live нужен будет бесплатный Finnhub-ключ → v3.5.
+- **Не добавлял зависимости** — всё на встроенном fetch + Route Handler. `dom-to-image`/`html-to-image` не ставил (явный запрет). Экспорт PNG и доработку аватаров не делал (явный запрет).
+
+### Известные мелочи / риски
+- В RSC flight-payload `formatMoney` («$1 910») сериализуется как `$$1 910` — это экранирование `$` в RSC-протоколе, рендерится корректно (`$1 910`). Не баг.
+- goldprice.org: эндпоинт неофициальный, на проде Vercel может вести себя иначе чем локально (другой IP-диапазон). Проверить `/api/tickers` после деплоя — если металлы `live:false`, см. v3.5.
+- placeholder-цены тикеров в `data/competition.ts`/БД могут расходиться с реальными (XAGUSD placeholder 58.12 vs live ~84) — после прогона миграций и обновления реальных данных это уйдёт; пока что live перекрывает placeholder на дашборде.
+- `/api/tickers` пререндерится на билде с build-time данными (БД→fallback т.к. миграция не прогнана), на Vercel ревалидируется раз в 5 мин — норма.
+
+### Валидация
+- `npm run lint` — OK.
+- `npm run build` — OK (TypeScript OK). Маршруты: `/` ƒ, `/admin` ƒ, `/api/tickers` ○ (revalidate 5m).
+- `npm run dev` (порт 4137) — `/` → 200 (лидерборд + строка тикеров + таб «Список наблюдения» с таблицей в HTML), `/admin` → 200 («Админка не настроена», `ADMIN_PASSWORD` пуст), `/api/tickers` → 200, все 6 тикеров `live:true` (BTC/CoinGecko, EUR+GBP+JPY/Frankfurter, XAU+XAG/goldprice.org).

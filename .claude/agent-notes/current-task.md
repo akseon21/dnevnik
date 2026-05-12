@@ -1,47 +1,49 @@
 # Текущий статус
 
-## v1 — ГОТОВ (2026-05-12)
-Дашборд: тикеры + equity-график + карточки участников, тёмная тема, статика `data/competition.ts`. Закоммичено (`feat: initial dashboard v1 …`), НЕ запушено.
+## v3 — ГОТОВ (2026-05-12)
 
-## v2-СТРУКТУРА — ГОТОВА (2026-05-12)
+Три пункта, ровно:
 
-Построено всё, что можно без живой БД (с graceful fallback на статику):
+### 1. Лидерборд с медальками
+- `app/components/Leaderboard.tsx` — топ-3 по росту % (changePct = current/start − 1). Места 🥇/🥈/🥉 + аватар-инициалы + рост % (зел/красн) + текущий баланс. Если участников <3 — в шапке блока «участников: N».
+- `lib/standings.ts` → `getLeaderboard(stats)` — сортировка по changePct, slice(0,3).
+- Рендерится в `app/page.tsx` отдельным блоком над DashboardShell.
 
-- **SQL-схема** `supabase/migrations/0001_init.sql`: таблицы `competition_meta`, `participants`, `balance_points` (unique participant_id+ts), `positions` (side LONG/SHORT, status open/closed, opened_at/closed_at), `tickers`. RLS включён везде, политики — публичный SELECT для anon; запись только через service_role (обходит RLS). Seed закомментирован.
-- **Типы** `lib/types.ts` — канонический shape (Competition/Participant/Position/TimelinePoint/Ticker). `data/competition.ts` теперь реэкспортит их и хранит ПЛЕЙСХОЛДЕРЫ (+ примеры позиций open/closed).
-- **Слой данных** `lib/db.ts` → `getCompetitionData()`: если есть `NEXT_PUBLIC_SUPABASE_URL`+`NEXT_PUBLIC_SUPABASE_ANON_KEY` — тянет из Supabase и собирает объект; иначе (или при ошибке БД) — возвращает статику. `lib/supabase.ts` — фабрики `getAnonClient()` / `getServiceClient()` + `hasSupabase()` / `hasServiceRole()`.
-- **`app/page.tsx`** переведён на `getCompetitionData()` (server component, `revalidate = 0`). `lib/standings.ts` — функции теперь принимают `Competition` аргументом, в `ParticipantStat` добавлены `availableCash`/`openPositions`/`closedPositions`/`unrealizedPnl`, хелпер `formatSignedMoney`.
-- **`app/components/DashboardShell.tsx`** (client) — фильтр «Все участники» (дропдаун-чекбоксы, влияет на график + карточки), табы (Открытые позиции / Закрытые сделки / Список наблюдения=заглушка / О соревновании), правые карточки участников с таблицами позиций + «Свободные средства», 2-колоночная сетка (график слева, панель справа).
-- **`app/admin/`**:
-  - `actions.ts` (`"use server"`) — `login`/`logout` (пароль из `ADMIN_PASSWORD`, httpOnly-cookie 30д), `getAdminData()` (читает с id через service-client), мутации: `addBalancePoint`, `addPosition`, `closePosition`, `upsertParticipant`, `upsertTicker`, `upsertMeta` — все guarded (проверка auth + `hasServiceRole`), `revalidatePath("/")` после успеха. Сигнатура мутаций: `(prev: ActionResult|null, fd: FormData) => Promise<ActionResult>` (под `useActionState`).
-  - `page.tsx` (server) — нет `ADMIN_PASSWORD` → «админка не настроена»; есть, но не залогинен → форма пароля; залогинен, но нет ключей Supabase → «БД не подключена»; иначе → `<AdminPanel>`.
-  - `AdminPanel.tsx` (client) — нативные формы + `useActionState`, статус ok/error под каждой формой.
-- **`.env.example`** — 4 переменные. `.gitignore` — добавлен `!.env.example`.
-- **Зависимость** `@supabase/supabase-js` ^2.105 добавлена.
-- README переписан под два режима (Supabase / статика) + инструкция подключения.
+### 2. Таб «Список наблюдения» — наполнен
+- Миграция `supabase/migrations/0002_watchlist.sql` — таблица `watchlist` (id uuid, instrument text, note text, participant_names text[], created_at). RLS: public SELECT, запись только service_role. Seed (3 placeholder-записи: XAGUSD/AUDUSD/GBPUSD) — НЕ закомментирован, прогонится вместе с миграцией. **Пользователь прогоняет через Supabase SQL Editor — у нас нет supabase CLI.**
+- `lib/types.ts` — тип `WatchlistItem` (instrument, note, participantNames), в `Competition` добавлено поле `watchlist`.
+- `data/competition.ts` — добавлено `watchlist` с теми же 3 placeholder-записями (статический fallback).
+- `lib/db.ts` — `getCompetitionData()` тянет `watchlist` (6-й параллельный запрос; если таблицы ещё нет — `watchlistRes.error` → `[]`, дашборд не падает).
+- `app/components/DashboardShell.tsx` — таб «Список наблюдения» теперь рендерит таблицу: Инструмент / Кто присматривает / Комментарий (компонент `WatchlistTable`). Принимает проп `watchlist`.
+- `/admin` — секция «Список наблюдения»: форма добавления (instrument / participant_names через запятую / note) + список текущих записей с кнопкой «Удалить». Server actions `addWatchlistItem` / `deleteWatchlistItem` в `app/admin/actions.ts` (guarded, service-role, revalidatePath). `getAdminData()` теперь возвращает `watchlist` с id.
+
+### 3. Live-тикеры (best-effort, без API-ключа)
+- `app/api/tickers/route.ts` — `export const revalidate = 300`. GET: тянет 3 источника параллельно (4-сек таймаут на каждый), мёрджит с БД-значениями (БД — fallback), отдаёт `{ tickers:[{symbol,price,change24h,live}], updatedAt }`. Если источник лёг — для его тикеров `live:false` и значение из БД. Если все легли — ровно БД, ничего не падает.
+- Источники:
+  - **BTCUSD** → CoinGecko `simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true` — РАБОТАЕТ, с реальным 24h change.
+  - **EURUSD / GBPUSD / USDJPY** → Frankfurter `latest?from=USD&to=EUR,GBP,JPY` — РАБОТАЕТ. EUR/GBP инвертируются (1/rate), JPY прямой. change24h = 0 (reference rates ЕЦБ не несут внутридневное изменение, обновление раз в день — для нашего кейса ок).
+  - **XAUUSD / XAGUSD** → goldprice.org `dbXRates/USD` — РАБОТАЕТ, но ТОЛЬКО с браузероподобными заголовками (User-Agent + Referer + Origin = goldprice.org), иначе отдаёт "Forbidden". С заголовками отдаёт цену золота/серебра в USD/унц + % изменение. Заголовки прописаны в `BROWSERLIKE_HEADERS` в route. Риск: неофициальный эндпоинт, может в любой момент закрыться/поменяться — тогда graceful degradation на БД-значения (раздаётся `live:false`, обновляется вручную через /admin).
+- `app/components/TickerStrip.tsx` (client) — заменил серверный рендер строки тикеров в `app/page.tsx`. Стартует с БД-значений (SSR), опрашивает `/api/tickers` каждые 60 сек, обновляет цены. Если запрос упал — оставляет последние известные. Маленький индикатор `● live` / `○ бд` справа + бейдж «бд» у тикеров без live-источника. Лидер/аутсайдер по-прежнему в этой строке (передаются пропсами).
+
+### НЕ делали (по запрету в задаче)
+- Экспорт графика в PNG — отменён.
+- Доработка аватаров — отменена (инициалы как были).
+- Никаких html-to-image / dom-to-image и т.п. — не ставили.
+- Ничего за пределами 3 пунктов не трогали.
 
 ### Валидация
 - `npm run lint` — чисто.
-- `npm run build` — чисто. В `.env.local` уже лежат живые URL+anon+service ключи (их положил пользователь), но миграция ещё НЕ прогнана → `getCompetitionData()` ловит `PGRST205 (table not found)` и корректно деградирует на статику.
-- `npm run dev` (порт 4123) — `/` → 200 (дашборд со статикой, табы/фильтр/карточки в HTML), `/admin` → 200 («Админка не настроена» — `ADMIN_PASSWORD` пустой).
+- `npm run build` — чисто. Маршруты: `/` ƒ dynamic (revalidate=0), `/admin` ƒ dynamic, `/api/tickers` ○ static (revalidate 5m).
+- `npm run dev` (порт 4137) — `/` → 200 (лидерборд + строка тикеров + таб «Список наблюдения» с таблицей в HTML), `/admin` → 200 («Админка не настроена» — `ADMIN_PASSWORD` пуст, как и было), `/api/tickers` → 200, проверено вживую: ВСЕ 6 тикеров вернулись `live:true` (BTC из CoinGecko, EUR/GBP/JPY из Frankfurter, XAU/XAG из goldprice.org).
+- Примечание: BTCUSD/XAGUSD из live-источников отличаются от placeholder'ов в БД (XAGUSD live ≈ 84 vs placeholder 58.12) — это нормально, live = правда; placeholder'ы заменятся реальными данными.
 
-## ЧТО ОСТАЛОСЬ — подключить реальный Supabase
-1. Проект на supabase.com (судя по `.env.local` — уже создан, ключи лежат).
-2. Прогнать `supabase/migrations/0001_init.sql`: через **SQL Editor** в дашборде Supabase (скопировать файл, выполнить) ИЛИ `supabase db push` (нужен CLI + `supabase link`; CLI на маке сейчас НЕ установлен).
-3. Заполнить `ADMIN_PASSWORD` в `.env.local` (сейчас пусто).
-4. Добавить все 4 переменные в Vercel → Environment Variables → Redeploy.
-5. Залить данные через `/admin` (или раскомментировать seed / написать insert'ы).
+## ЧТО ОСТАЛОСЬ ПОЛЬЗОВАТЕЛЮ
+1. **Прогнать `supabase/migrations/0002_watchlist.sql`** через Supabase SQL Editor (вместе с seed-вставкой 3 placeholder-записей). Без этого вотчлист берётся из `data/competition.ts` (тоже 3 записи) — дашборд работает.
+   - Напоминание: `0001_init.sql` тоже ещё НЕ прогнан (по прошлым заметкам). Если БД пустая — прогнать оба по порядку.
+2. (если ещё не сделано) `ADMIN_PASSWORD` в `.env.local` + в Vercel → Environment Variables → Redeploy.
+3. После деплоя проверить, что `/api/tickers` на проде отдаёт `live:true` для металлов (goldprice.org мог заблокировать IP Vercel — тогда `live:false`, и для live-металлов нужен будет бесплатный Finnhub-ключ → v3.5).
 
-### Как тестировать после подключения
-- `npm run dev` → `/` показывает данные из БД (не плейсхолдеры). БД пустая → пустой дашборд; добавь через `/admin`.
-- `/admin` → ввести `ADMIN_PASSWORD` → формы работают (добавил точку баланса → появилась на графике; обнови `/`).
-- Проблема с БД → в логах сервера `[db] Supabase fetch failed, falling back to static` + код PostgREST.
-
-## v3 (потом)
-Live-тикеры (Finnhub/TwelveData free API), анимации линий, экспорт графика PNG, лидерборд с медальками, реальные аватары.
-
-## Открытые вопросы к пользователю
-1. Реальные имена участников + стартовые депозиты (сейчас плейсхолдеры Кирилл/Алексей/Павел/Lauris/Руслан).
-2. Реальное название/даты соревнования (сейчас «Реалити-торговля: 2 недели», 13–27 мая 2026).
-3. Точный список тикеров верхней строки.
-4. Реальные фото-аватары (сейчас инициалы).
+## v4 / открытые вопросы
+- v3.5 — fallback для металлов: если goldprice.org нестабилен на проде Vercel → завести бесплатный Finnhub-ключ (или metals.dev / metalpriceapi free tier), env-переменная, источник в `app/api/tickers/route.ts`.
+- Реальный 24h change для валютных пар — Frankfurter его не даёт; можно считать самим (запросить `latest` + вчерашнюю дату) либо принять, что для FX показываем 0%.
+- Открытые вопросы из v2 всё ещё в силе: реальные имена участников + стартовые депозиты, реальное название/даты, точный список тикеров, фото-аватары.

@@ -20,6 +20,7 @@ export type {
   Position,
   TimelinePoint,
   Ticker,
+  WatchlistItem,
 } from "@/lib/types";
 
 export const competition: Competition = {
@@ -184,6 +185,23 @@ export const competition: Competition = {
       ],
       positions: [],
       availableCash: 480,
+    },
+  ],
+  watchlist: [
+    {
+      instrument: "XAGUSD",
+      note: "ждём отбой от уровня",
+      participantNames: ["Кирилл", "Алексей"],
+    },
+    {
+      instrument: "AUDUSD",
+      note: "смотрю на новостях RBA",
+      participantNames: ["Руслан"],
+    },
+    {
+      instrument: "GBPUSD",
+      note: "после CPI",
+      participantNames: ["Lauris"],
     },
   ],
 };

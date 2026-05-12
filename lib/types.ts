@@ -32,6 +32,12 @@ export type Participant = {
   availableCash: number; // свободные средства, $
 };
 
+export type WatchlistItem = {
+  instrument: string; // тикер, который присматривают (XAGUSD, AUDUSD, ...) — НЕ переводим
+  note: string; // комментарий «ждём отбой от уровня» и т.п.
+  participantNames: string[]; // имена участников, кто присматривает
+};
+
 export type Competition = {
   title: string;
   startDate: string; // "ГГГГ-ММ-ДД"
@@ -39,4 +45,5 @@ export type Competition = {
   note: string; // пометка «данные обновляются раз в день…»
   tickers: Ticker[];
   participants: Participant[];
+  watchlist: WatchlistItem[]; // список наблюдения (v3)
 };
