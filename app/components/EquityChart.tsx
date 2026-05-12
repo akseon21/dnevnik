@@ -20,7 +20,7 @@ import {
   formatTs,
   initials,
 } from "@/lib/standings";
-import type { Position } from "@/lib/types";
+import { positionPnl, type Position } from "@/lib/types";
 
 type LineMeta = { name: string; color: string };
 
@@ -126,7 +126,7 @@ function tradeTitle(owner: string, pos: Position): string {
       : pos.closedAt
         ? ` · закрыта ${formatTs(pos.closedAt)}`
         : "";
-  return `${owner}: ${dir} ${pos.instrument} · ${pos.lot} лот · ${formatSignedMoney(pos.unrealizedPnl)}${range}`;
+  return `${owner}: ${dir} ${pos.instrument} · ${pos.lot} лот · ${formatSignedMoney(positionPnl(pos))}${range}`;
 }
 
 const LINE_ANIM_MS = 1100;
@@ -377,7 +377,7 @@ export default function EquityChart({ rows, lines, stats, onParticipantClick }: 
               />
             ))}
             {drawn && tradeMarkers.map((m) => {
-              const positive = m.pos.unrealizedPnl >= 0;
+              const positive = positionPnl(m.pos) >= 0;
               return (
                 <ReferenceDot
                   key={m.key}

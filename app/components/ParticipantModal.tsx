@@ -10,7 +10,7 @@ import {
   initials,
   type ParticipantStat,
 } from "@/lib/standings";
-import type { Position } from "@/lib/types";
+import { positionPnl, type Position } from "@/lib/types";
 
 function ChangeText({ value }: { value: number }) {
   const cls = value > 0 ? "text-pos" : value < 0 ? "text-neg" : "text-muted";
@@ -90,7 +90,7 @@ function ClosedTrades({ positions }: { positions: Position[] }) {
               <td className="py-1.5 pr-2 tabular-nums text-muted">
                 {p.openedAt ? formatTs(p.openedAt) : "—"} → {p.closedAt ? formatTs(p.closedAt) : "—"}
               </td>
-              <td className="py-1.5 text-right"><PnlText value={p.unrealizedPnl} /></td>
+              <td className="py-1.5 text-right"><PnlText value={positionPnl(p)} /></td>
             </tr>
           ))}
         </tbody>
@@ -142,7 +142,7 @@ function StatsBlock({ stat }: { stat: ParticipantStat }) {
           {s.best ? (
             <span className="flex items-baseline gap-1.5">
               <span className="text-foreground">{s.best.instrument}</span>
-              <PnlText value={s.best.unrealizedPnl} />
+              <PnlText value={positionPnl(s.best)} />
             </span>
           ) : (
             <span className="text-muted">{dash}</span>
@@ -152,7 +152,7 @@ function StatsBlock({ stat }: { stat: ParticipantStat }) {
           {s.worst ? (
             <span className="flex items-baseline gap-1.5">
               <span className="text-foreground">{s.worst.instrument}</span>
-              <PnlText value={s.worst.unrealizedPnl} />
+              <PnlText value={positionPnl(s.worst)} />
             </span>
           ) : (
             <span className="text-muted">{dash}</span>
@@ -246,6 +246,19 @@ export default function ParticipantModal({
           </button>
         </div>
 
+        {/* баланс / equity / свободные средства — всё вычислено из сделок */}
+        <div className="mb-4 grid grid-cols-3 gap-2">
+          <Metric label="Баланс">
+            <span className="tabular-nums">{formatMoney(stat.balance)}</span>
+          </Metric>
+          <Metric label="Equity">
+            <span className="tabular-nums">{formatMoney(stat.equity)}</span>
+          </Metric>
+          <Metric label="Свободные средства">
+            <span className="tabular-nums">{formatMoney(stat.availableCash)}</span>
+          </Metric>
+        </div>
+
         {/* статистика */}
         <StatsBlock stat={stat} />
 
@@ -264,18 +277,12 @@ export default function ParticipantModal({
         </section>
 
         {/* закрытые сделки */}
-        <section className="mb-4">
+        <section>
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
             Закрытые сделки
           </h3>
           <ClosedTrades positions={stat.closedPositions} />
         </section>
-
-        {/* свободные средства */}
-        <div className="flex justify-end border-t border-border/60 pt-3 text-sm">
-          <span className="text-muted">Свободные средства:&nbsp;</span>
-          <span className="tabular-nums text-foreground">{formatMoney(stat.availableCash)}</span>
-        </div>
       </div>
     </div>
   );

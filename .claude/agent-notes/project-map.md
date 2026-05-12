@@ -1,4 +1,6 @@
-# Карта проекта (v4)
+# Карта проекта (v6 — trade-centric)
+
+> **v6-дельта (сделко-центричная модель):** баланс / equity / свободные средства / timeline графика НЕ хранятся — вычисляются из сделок (`lib/standings.ts:getParticipantStats`). `Participant` = `name/color/avatar/startingDeposit/positions` (нет timeline, нет availableCash). `Position` = `side/instrument/lot/exitPlan/margin/unrealizedPnl(плавающий, 0 при открытии)/realizedPnl(null|число при закрытии)/status/openedAt/closedAt`. Хелпер `positionPnl()` в lib/types.ts. Миграции `0003_trade_centric.sql` (ALTER: participants.starting_deposit, positions.margin+realized_pnl) + `0003b_seed.sql` (reseed) — НАДО прогнать через SQL Editor. lib/db.ts читает новую схему, при старой схеме / ошибке → fallback на data/competition.ts (проверено). Админка переделана: openTrade / updateTradePnl / closeTrade / upsertParticipant(starting_deposit); формы «точка баланса» убраны. ParticipantModal: добавлена сетка Баланс/Equity/Свободные средства. balance_points (0001) и watchlist (0002) в БД остаются, не используются.
 
 > v4-дельта: убран таб «Список наблюдения» (везде — UI/db/admin; таблица watchlist в БД оставлена, не используется). Карточки участников справа → компактный ряд + модалка `ParticipantModal.tsx`. График на всю ширину (1-кол. layout). В `EquityChart` добавлены: клик-выделение линии через легенду, таймфреймы (Весь период/Неделя/3 дня/Сегодня), маркеры закрытых сделок (ReferenceDot+SVG title-тултип, цвет по PnL). Адаптив под мобилу. Футер очищен (только title+год).
 

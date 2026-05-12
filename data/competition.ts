@@ -1,18 +1,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// СТАТИЧЕСКИЙ FALLBACK ДЛЯ ДАШБОРДА
+// СТАТИЧЕСКИЙ FALLBACK ДЛЯ ДАШБОРДА (v6 — trade-centric)
 //
-// Этот файл используется когда Supabase НЕ настроен (нет env-переменных
-// NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY). Тогда дашборд
-// читает данные отсюда — как в v1. Когда Supabase подключён, данные берутся из БД
-// (см. lib/db.ts), а этот файл остаётся резервом.
+// Используется когда Supabase НЕ настроен ИЛИ когда в БД ещё старая схема (нет
+// колонки participants.starting_deposit) — см. lib/db.ts. Тогда дашборд читает
+// данные отсюда. Когда БД с новой схемой подключена — данные берутся из неё (/admin).
 //
-// Чтобы обновить дашборд БЕЗ БД: отредактируй этот файл → commit → push → Vercel
-// перерендерит. С БД — используй страницу /admin.
+// Модель: у участника только starting_deposit + сделки. Баланс / equity /
+// свободные средства / timeline графика вычисляются из сделок (lib/standings.ts).
 //
-// ВНИМАНИЕ: данные ниже — ПЛЕЙСХОЛДЕРЫ. Замени на реальные.
+// ВНИМАНИЕ: данные ниже — ПЛЕЙСХОЛДЕРЫ. Замени на реальных участников и депозиты.
+// Синхронизировано с supabase/migrations/0003b_seed.sql.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { Competition } from "@/lib/types";
+import type { Competition, Position } from "@/lib/types";
 
 export type {
   Competition,
@@ -23,11 +23,54 @@ export type {
   WatchlistItem,
 } from "@/lib/types";
 
+const open = (
+  side: Position["side"],
+  instrument: string,
+  lot: number,
+  exitPlan: string,
+  margin: number,
+  unrealizedPnl: number,
+  openedAt: string,
+): Position => ({
+  side,
+  instrument,
+  lot,
+  exitPlan,
+  margin,
+  unrealizedPnl,
+  realizedPnl: null,
+  status: "open",
+  openedAt,
+  closedAt: null,
+});
+
+const closed = (
+  side: Position["side"],
+  instrument: string,
+  lot: number,
+  exitPlan: string,
+  margin: number,
+  realizedPnl: number,
+  openedAt: string,
+  closedAt: string,
+): Position => ({
+  side,
+  instrument,
+  lot,
+  exitPlan,
+  margin,
+  unrealizedPnl: 0,
+  realizedPnl,
+  status: "closed",
+  openedAt,
+  closedAt,
+});
+
 export const competition: Competition = {
   title: "Реалити-торговля: 2 недели",
   startDate: "2026-05-13",
   endDate: "2026-05-27",
-  note: "Данные обновляются раз в день, в конце торгового дня",
+  note: "Баланс и equity считаются автоматически из сделок",
   tickers: [
     { symbol: "XAUUSD", price: 4682.5, change24h: 0.84 },
     { symbol: "XAGUSD", price: 58.12, change24h: -0.42 },
@@ -39,169 +82,65 @@ export const competition: Competition = {
   participants: [
     {
       name: "Кирилл",
-      color: "#22d3ee", // cyan
+      color: "#22d3ee",
       avatar: null,
-      timeline: [
-        { ts: "2026-05-13T10:00", value: 1500 },
-        { ts: "2026-05-14T10:00", value: 1565 },
-        { ts: "2026-05-15T10:00", value: 1620 },
-        { ts: "2026-05-16T10:00", value: 1740 },
-        { ts: "2026-05-17T10:00", value: 1705 },
-        { ts: "2026-05-18T10:00", value: 1830 },
-        { ts: "2026-05-19T10:00", value: 1910 },
-      ],
+      startingDeposit: 1500, // → balance 1830 (closed +330), equity 1933, free 1350
       positions: [
-        {
-          side: "LONG",
-          instrument: "XAUUSD",
-          lot: 0.5,
-          exitPlan: "TP 4720 / SL 4650",
-          unrealizedPnl: 145,
-          status: "open",
-          openedAt: "2026-05-18T11:00",
-        },
-        {
-          side: "SHORT",
-          instrument: "USDJPY",
-          lot: 0.3,
-          exitPlan: "TP 151.20 / SL 153.10",
-          unrealizedPnl: -42,
-          status: "open",
-          openedAt: "2026-05-19T09:30",
-        },
-        {
-          side: "LONG",
-          instrument: "EURUSD",
-          lot: 0.4,
-          exitPlan: "TP 1.0980 / SL 1.0880",
-          unrealizedPnl: 88,
-          status: "closed",
-          openedAt: "2026-05-15T10:00",
-          closedAt: "2026-05-17T16:00",
-        },
+        closed("LONG", "EURUSD", 0.4, "TP 1.0980 / SL 1.0880", 220, 120, "2026-05-13T10:00", "2026-05-14T16:00"),
+        closed("SHORT", "GBPUSD", 0.3, "TP 1.2680 / SL 1.2820", 200, -45, "2026-05-15T09:00", "2026-05-16T12:00"),
+        closed("LONG", "XAUUSD", 0.3, "TP 4690 / SL 4600", 280, 180, "2026-05-16T10:00", "2026-05-17T15:00"),
+        closed("LONG", "XAGUSD", 0.5, "TP 59.0 / SL 57.0", 160, 75, "2026-05-18T10:00", "2026-05-18T17:00"),
+        open("LONG", "XAUUSD", 0.5, "TP 4720 / SL 4650", 300, 145, "2026-05-19T11:00"),
+        open("SHORT", "USDJPY", 0.3, "TP 151.20 / SL 153.10", 180, -42, "2026-05-19T09:30"),
       ],
-      availableCash: 920,
     },
     {
       name: "Алексей",
-      color: "#a78bfa", // violet
+      color: "#a78bfa",
       avatar: null,
-      timeline: [
-        { ts: "2026-05-13T10:00", value: 1200 },
-        { ts: "2026-05-14T10:00", value: 1255 },
-        { ts: "2026-05-15T10:00", value: 1180 },
-        { ts: "2026-05-16T10:00", value: 1310 },
-        { ts: "2026-05-17T10:00", value: 1395 },
-        { ts: "2026-05-18T10:00", value: 1360 },
-        { ts: "2026-05-19T10:00", value: 1480 },
-      ],
+      startingDeposit: 1200, // → balance 1480 (closed +280), equity 1544, free 1160
       positions: [
-        {
-          side: "LONG",
-          instrument: "XAGUSD",
-          lot: 1.0,
-          exitPlan: "TP 59.50 / SL 57.40",
-          unrealizedPnl: 64,
-          status: "open",
-          openedAt: "2026-05-19T10:15",
-        },
+        closed("SHORT", "BTCUSD", 0.1, "TP 70000 / SL 73000", 400, -20, "2026-05-13T11:00", "2026-05-14T18:00"),
+        closed("LONG", "EURUSD", 0.5, "TP 1.0960 / SL 1.0860", 250, 95, "2026-05-15T10:00", "2026-05-16T16:00"),
+        closed("LONG", "XAUUSD", 0.4, "TP 4700 / SL 4620", 300, 205, "2026-05-17T10:00", "2026-05-18T14:00"),
+        open("LONG", "XAGUSD", 1.0, "TP 59.50 / SL 57.40", 320, 64, "2026-05-19T10:15"),
       ],
-      availableCash: 640,
     },
     {
       name: "Павел",
-      color: "#f472b6", // pink
+      color: "#f472b6",
       avatar: null,
-      timeline: [
-        { ts: "2026-05-13T10:00", value: 1000 },
-        { ts: "2026-05-14T10:00", value: 980 },
-        { ts: "2026-05-15T10:00", value: 940 },
-        { ts: "2026-05-16T10:00", value: 905 },
-        { ts: "2026-05-17T10:00", value: 870 },
-        { ts: "2026-05-18T10:00", value: 845 },
-        { ts: "2026-05-19T10:00", value: 815 },
-      ],
+      startingDeposit: 1000, // → balance 815 (closed -185), equity 730, free 465
       positions: [
-        {
-          side: "SHORT",
-          instrument: "BTCUSD",
-          lot: 0.1,
-          exitPlan: "TP 68000 / SL 73500",
-          unrealizedPnl: -85,
-          status: "open",
-          openedAt: "2026-05-18T14:00",
-        },
+        closed("LONG", "GBPUSD", 0.4, "TP 1.2850 / SL 1.2680", 220, -65, "2026-05-13T10:30", "2026-05-14T15:00"),
+        closed("SHORT", "XAUUSD", 0.3, "TP 4600 / SL 4700", 260, -40, "2026-05-15T11:00", "2026-05-16T13:00"),
+        closed("LONG", "EURUSD", 0.5, "TP 1.0980 / SL 1.0880", 250, -80, "2026-05-17T09:00", "2026-05-18T11:00"),
+        open("SHORT", "BTCUSD", 0.1, "TP 68000 / SL 73500", 350, -85, "2026-05-18T14:00"),
       ],
-      availableCash: 310,
     },
     {
       name: "Lauris",
-      color: "#4ade80", // green
+      color: "#4ade80",
       avatar: null,
-      timeline: [
-        { ts: "2026-05-13T10:00", value: 1350 },
-        { ts: "2026-05-14T10:00", value: 1420 },
-        { ts: "2026-05-15T10:00", value: 1390 },
-        { ts: "2026-05-16T10:00", value: 1505 },
-        { ts: "2026-05-17T10:00", value: 1560 },
-        { ts: "2026-05-18T10:00", value: 1620 },
-        { ts: "2026-05-19T10:00", value: 1585 },
-      ],
+      startingDeposit: 1350, // → balance 1585 (closed +235), equity 1550, free 1345
       positions: [
-        {
-          side: "LONG",
-          instrument: "GBPUSD",
-          lot: 0.6,
-          exitPlan: "TP 1.2850 / SL 1.2680",
-          unrealizedPnl: -35,
-          status: "open",
-          openedAt: "2026-05-19T08:00",
-        },
-        {
-          side: "LONG",
-          instrument: "XAUUSD",
-          lot: 0.3,
-          exitPlan: "TP 4690 / SL 4600",
-          unrealizedPnl: 210,
-          status: "closed",
-          openedAt: "2026-05-14T10:00",
-          closedAt: "2026-05-16T15:00",
-        },
+        closed("LONG", "XAGUSD", 0.6, "TP 59.0 / SL 57.0", 200, 70, "2026-05-13T10:00", "2026-05-14T17:00"),
+        closed("LONG", "XAUUSD", 0.3, "TP 4690 / SL 4600", 280, 210, "2026-05-14T10:00", "2026-05-16T15:00"),
+        closed("SHORT", "USDJPY", 0.4, "TP 150.50 / SL 153.50", 230, -45, "2026-05-17T10:00", "2026-05-18T12:00"),
+        open("LONG", "GBPUSD", 0.6, "TP 1.2850 / SL 1.2680", 240, -35, "2026-05-19T08:00"),
       ],
-      availableCash: 720,
     },
     {
       name: "Руслан",
-      color: "#fbbf24", // amber
+      color: "#fbbf24",
       avatar: null,
-      timeline: [
-        { ts: "2026-05-13T10:00", value: 1100 },
-        { ts: "2026-05-14T10:00", value: 1140 },
-        { ts: "2026-05-15T10:00", value: 1210 },
-        { ts: "2026-05-16T10:00", value: 1175 },
-        { ts: "2026-05-17T10:00", value: 1095 },
-        { ts: "2026-05-18T10:00", value: 1040 },
-        { ts: "2026-05-19T10:00", value: 1130 },
+      startingDeposit: 1100, // → balance 1130 (closed +30), нет открытых
+      positions: [
+        closed("LONG", "EURUSD", 0.4, "TP 1.0960 / SL 1.0870", 200, 40, "2026-05-13T12:00", "2026-05-14T16:00"),
+        closed("LONG", "BTCUSD", 0.1, "TP 73000 / SL 69000", 400, -90, "2026-05-15T10:00", "2026-05-16T14:00"),
+        closed("SHORT", "XAGUSD", 0.5, "TP 56.0 / SL 59.0", 180, 80, "2026-05-17T11:00", "2026-05-18T15:00"),
       ],
-      positions: [],
-      availableCash: 480,
     },
   ],
-  watchlist: [
-    {
-      instrument: "XAGUSD",
-      note: "ждём отбой от уровня",
-      participantNames: ["Кирилл", "Алексей"],
-    },
-    {
-      instrument: "AUDUSD",
-      note: "смотрю на новостях RBA",
-      participantNames: ["Руслан"],
-    },
-    {
-      instrument: "GBPUSD",
-      note: "после CPI",
-      participantNames: ["Lauris"],
-    },
-  ],
+  watchlist: [],
 };

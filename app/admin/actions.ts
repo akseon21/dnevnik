@@ -8,10 +8,18 @@ import { getServiceClient, hasServiceRole } from "@/lib/supabase";
 const AUTH_COOKIE = "admin_auth";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Server Actions для админки.
-// Авторизация: пароль из process.env.ADMIN_PASSWORD, хранится в httpOnly-cookie.
-// Мутации: через service-role клиент Supabase (обходит RLS). Если ключи не заданы
-// — мутации возвращают понятную ошибку (UI это отражает).
+// Server Actions для админки (v6 — trade-centric).
+// Авторизация: пароль из process.env.ADMIN_PASSWORD в httpOnly-cookie.
+// Мутации: через service-role клиент Supabase (обходит RLS). guarded() проверяет
+// авторизацию + наличие service-role ключа, на успехе делает revalidatePath("/").
+//
+// Сделко-центричный поток:
+//   • upsertParticipant — имя / цвет / starting_deposit / порядок
+//   • openTrade   — INSERT position status='open', unrealized_pnl=0, margin задаётся
+//   • updateTradePnl — UPDATE unrealized_pnl открытой позиции
+//   • closeTrade  — UPDATE status='closed', realized_pnl, closed_at
+//   • upsertTicker / upsertMeta — как раньше
+// Точки баланса руками больше НЕ вводятся — timeline выводится из закрытых сделок.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function isAuthed(): Promise<boolean> {
@@ -77,7 +85,7 @@ export type AdminData = {
     id: string;
     name: string;
     color: string;
-    available_cash: number;
+    starting_deposit: number;
     sort_order: number;
   }[];
   tickers: { symbol: string; price: number; change_24h: number }[];
@@ -87,6 +95,7 @@ export type AdminData = {
     side: string;
     instrument: string;
     lot: number;
+    margin: number;
     unrealized_pnl: number;
   }[];
 };
@@ -104,12 +113,12 @@ export async function getAdminData(): Promise<AdminData | null> {
       .maybeSingle(),
     db
       .from("participants")
-      .select("id, name, color, available_cash, sort_order")
+      .select("id, name, color, starting_deposit, sort_order")
       .order("sort_order", { ascending: true }),
     db.from("tickers").select("symbol, price, change_24h").order("symbol"),
     db
       .from("positions")
-      .select("id, participant_id, side, instrument, lot, unrealized_pnl")
+      .select("id, participant_id, side, instrument, lot, margin, unrealized_pnl")
       .eq("status", "open")
       .order("opened_at", { ascending: false }),
   ]);
@@ -124,7 +133,7 @@ export async function getAdminData(): Promise<AdminData | null> {
 const numField = (fd: FormData, key: string): number => Number(fd.get(key) ?? 0) || 0;
 const strField = (fd: FormData, key: string): string => String(fd.get(key) ?? "").trim();
 
-/** Нормализует "2026-05-13T10:00" из <input type="datetime-local"> в ISO. */
+/** Нормализует "2026-05-13T10:00" из <input type="datetime-local"> в ISO. Пусто → now. */
 function toIso(v: string): string {
   if (!v) return new Date().toISOString();
   // datetime-local не несёт зону — трактуем как UTC для предсказуемости.
@@ -132,36 +141,19 @@ function toIso(v: string): string {
   return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
 }
 
-// ── balance_points ───────────────────────────────────────────────────────────
-export async function addBalancePoint(
+// ── открыть сделку ───────────────────────────────────────────────────────────
+export async function openTrade(
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
   return guarded(async (db) => {
     const participant_id = strField(formData, "participant_id");
-    const ts = toIso(strField(formData, "ts"));
-    const value = numField(formData, "value");
-    if (!participant_id) return { ok: false, error: "Не выбран участник" };
-    const { error } = await db
-      .from("balance_points")
-      .upsert({ participant_id, ts, value }, { onConflict: "participant_id,ts" });
-    return error ? { ok: false, error: error.message } : ok("Точка баланса добавлена");
-  });
-}
-
-// ── positions ────────────────────────────────────────────────────────────────
-export async function addPosition(
-  _prev: ActionResult | null,
-  formData: FormData,
-): Promise<ActionResult> {
-  return guarded(async (db) => {
-    const participant_id = strField(formData, "participant_id");
-    const side = strField(formData, "side") as "LONG" | "SHORT";
-    const instrument = strField(formData, "instrument");
+    const side = (strField(formData, "side") || "LONG") as "LONG" | "SHORT";
+    const instrument = strField(formData, "instrument").toUpperCase();
     const lot = numField(formData, "lot");
+    const margin = numField(formData, "margin");
     const exit_plan = strField(formData, "exit_plan");
-    const unrealized_pnl = numField(formData, "unrealized_pnl");
-    const status = strField(formData, "status") as "open" | "closed";
+    const opened_at = toIso(strField(formData, "opened_at"));
     if (!participant_id || !instrument)
       return { ok: false, error: "Участник и инструмент обязательны" };
     const { error } = await db.from("positions").insert({
@@ -169,34 +161,55 @@ export async function addPosition(
       side,
       instrument,
       lot,
+      margin,
       exit_plan,
-      unrealized_pnl,
-      status,
-      closed_at: status === "closed" ? new Date().toISOString() : null,
+      unrealized_pnl: 0,
+      realized_pnl: null,
+      status: "open",
+      opened_at,
+      closed_at: null,
     });
-    return error ? { ok: false, error: error.message } : ok("Позиция добавлена");
+    return error ? { ok: false, error: error.message } : ok(`Сделка открыта: ${side} ${instrument}`);
   });
 }
 
-export async function closePosition(
+// ── обновить плавающий PnL открытой сделки ───────────────────────────────────
+export async function updateTradePnl(
   _prev: ActionResult | null,
   formData: FormData,
 ): Promise<ActionResult> {
   return guarded(async (db) => {
     const id = strField(formData, "id");
-    const pnl = formData.get("unrealized_pnl");
     if (!id) return { ok: false, error: "Нет id позиции" };
-    const patch: Record<string, unknown> = {
-      status: "closed",
-      closed_at: new Date().toISOString(),
-    };
-    if (pnl != null && pnl !== "") patch.unrealized_pnl = Number(pnl) || 0;
-    const { error } = await db.from("positions").update(patch).eq("id", id);
-    return error ? { ok: false, error: error.message } : ok("Позиция закрыта");
+    const unrealized_pnl = numField(formData, "unrealized_pnl");
+    const { error } = await db
+      .from("positions")
+      .update({ unrealized_pnl })
+      .eq("id", id)
+      .eq("status", "open");
+    return error ? { ok: false, error: error.message } : ok("Плавающий PnL обновлён");
   });
 }
 
-// ── participants ─────────────────────────────────────────────────────────────
+// ── закрыть сделку ───────────────────────────────────────────────────────────
+export async function closeTrade(
+  _prev: ActionResult | null,
+  formData: FormData,
+): Promise<ActionResult> {
+  return guarded(async (db) => {
+    const id = strField(formData, "id");
+    if (!id) return { ok: false, error: "Нет id позиции" };
+    const realized_pnl = numField(formData, "realized_pnl");
+    const closed_at = toIso(strField(formData, "closed_at"));
+    const { error } = await db
+      .from("positions")
+      .update({ status: "closed", realized_pnl, closed_at, unrealized_pnl: 0 })
+      .eq("id", id);
+    return error ? { ok: false, error: error.message } : ok("Сделка закрыта");
+  });
+}
+
+// ── участники ────────────────────────────────────────────────────────────────
 export async function upsertParticipant(
   _prev: ActionResult | null,
   formData: FormData,
@@ -205,10 +218,10 @@ export async function upsertParticipant(
     const id = strField(formData, "id");
     const name = strField(formData, "name");
     const color = strField(formData, "color") || "#22d3ee";
-    const available_cash = numField(formData, "available_cash");
+    const starting_deposit = numField(formData, "starting_deposit");
     const sort_order = numField(formData, "sort_order");
     if (!name) return { ok: false, error: "Имя обязательно" };
-    const row = { name, color, available_cash, sort_order };
+    const row = { name, color, starting_deposit, sort_order };
     const { error } = id
       ? await db.from("participants").update(row).eq("id", id)
       : await db.from("participants").insert(row);
@@ -218,7 +231,7 @@ export async function upsertParticipant(
   });
 }
 
-// ── tickers ──────────────────────────────────────────────────────────────────
+// ── тикеры ───────────────────────────────────────────────────────────────────
 export async function upsertTicker(
   _prev: ActionResult | null,
   formData: FormData,
@@ -238,7 +251,7 @@ export async function upsertTicker(
   });
 }
 
-// ── competition_meta ─────────────────────────────────────────────────────────
+// ── метаданные соревнования ──────────────────────────────────────────────────
 export async function upsertMeta(
   _prev: ActionResult | null,
   formData: FormData,
@@ -258,7 +271,3 @@ export async function upsertMeta(
     return error ? { ok: false, error: error.message } : ok("Параметры соревнования сохранены");
   });
 }
-
-// ── watchlist ────────────────────────────────────────────────────────────────
-// Управление вотчлистом убрано из UI в v4. Таблица `watchlist` в Supabase
-// сохранена (миграция 0002), но дашборд и админка её больше не используют.

@@ -3,15 +3,16 @@ import { getAnonClient, hasSupabase } from "@/lib/supabase";
 import type { Competition, Participant, Position, Ticker } from "@/lib/types";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Слой данных дашборда.
+// Слой данных дашборда (v6 — trade-centric).
 //
 // getCompetitionData():
-//   • Если Supabase настроен (env есть) → тянет competition_meta + participants
-//     + balance_points + positions + tickers и собирает в объект Competition.
-//   • Если НЕ настроен → возвращает статический fallback из data/competition.ts.
+//   • Supabase настроен И в БД новая схема (есть participants.starting_deposit) →
+//     тянет competition_meta + participants + positions + tickers, собирает Competition.
+//   • Supabase не настроен, или ещё старая схема, или ошибка → статический fallback
+//     из data/competition.ts. Дашборд не падает ни при старой, ни при новой схеме.
 //
-// Дашборд (app/page.tsx) вызывает только getCompetitionData() и не знает, откуда
-// данные. Это позволяет v1 (статика) и v2 (Supabase) работать без правок UI.
+// balance / equity / свободные средства / timeline графика — вычисляются из сделок
+// в lib/standings.ts, тут только сырые данные.
 // ─────────────────────────────────────────────────────────────────────────────
 
 type MetaRow = {
@@ -26,14 +27,8 @@ type ParticipantRow = {
   name: string;
   color: string;
   avatar_url: string | null;
-  available_cash: number | string | null;
+  starting_deposit: number | string | null;
   sort_order: number | null;
-};
-
-type BalancePointRow = {
-  participant_id: string;
-  ts: string;
-  value: number | string;
 };
 
 type PositionRow = {
@@ -42,7 +37,9 @@ type PositionRow = {
   instrument: string;
   lot: number | string | null;
   exit_plan: string | null;
+  margin: number | string | null;
   unrealized_pnl: number | string | null;
+  realized_pnl: number | string | null;
   status: "open" | "closed";
   opened_at: string | null;
   closed_at: string | null;
@@ -57,6 +54,9 @@ type TickerRow = {
 const num = (v: number | string | null | undefined): number =>
   v == null ? 0 : typeof v === "number" ? v : Number(v) || 0;
 
+const numOrNull = (v: number | string | null | undefined): number | null =>
+  v == null ? null : typeof v === "number" ? v : Number(v);
+
 export async function getCompetitionData(): Promise<Competition> {
   if (!hasSupabase()) return staticCompetition;
 
@@ -64,40 +64,37 @@ export async function getCompetitionData(): Promise<Competition> {
   if (!supabase) return staticCompetition;
 
   try {
-    const [metaRes, participantsRes, balanceRes, positionsRes, tickersRes] =
-      await Promise.all([
-        supabase
-          .from("competition_meta")
-          .select("title, start_date, end_date, note")
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-        supabase
-          .from("participants")
-          .select("id, name, color, avatar_url, available_cash, sort_order")
-          .order("sort_order", { ascending: true })
-          .order("name", { ascending: true }),
-        supabase
-          .from("balance_points")
-          .select("participant_id, ts, value")
-          .order("ts", { ascending: true }),
-        supabase
-          .from("positions")
-          .select(
-            "participant_id, side, instrument, lot, exit_plan, unrealized_pnl, status, opened_at, closed_at",
-          )
-          .order("opened_at", { ascending: false }),
-        supabase
-          .from("tickers")
-          .select("symbol, price, change_24h")
-          .order("symbol", { ascending: true }),
-      ]);
+    const [metaRes, participantsRes, positionsRes, tickersRes] = await Promise.all([
+      supabase
+        .from("competition_meta")
+        .select("title, start_date, end_date, note")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("participants")
+        .select("id, name, color, avatar_url, starting_deposit, sort_order")
+        .order("sort_order", { ascending: true })
+        .order("name", { ascending: true }),
+      supabase
+        .from("positions")
+        .select(
+          "participant_id, side, instrument, lot, exit_plan, margin, unrealized_pnl, realized_pnl, status, opened_at, closed_at",
+        )
+        .order("opened_at", { ascending: false }),
+      supabase
+        .from("tickers")
+        .select("symbol, price, change_24h")
+        .order("symbol", { ascending: true }),
+    ]);
 
-    // Если базовые запросы упали — деградируем на статику.
-    if (participantsRes.error || metaRes.error) {
+    // Старая схема (нет колонки starting_deposit или margin/realized_pnl) либо ошибка
+    // на базовых запросах → деградируем на статику. Это и есть graceful-обработка
+    // случая «миграция 0003 ещё не прогнана».
+    if (participantsRes.error || metaRes.error || positionsRes.error) {
       console.error(
-        "[db] Supabase fetch failed, falling back to static:",
-        participantsRes.error ?? metaRes.error,
+        "[db] Supabase fetch failed or schema is pre-v6, falling back to static:",
+        participantsRes.error ?? metaRes.error ?? positionsRes.error,
       );
       return staticCompetition;
     }
@@ -110,16 +107,10 @@ export async function getCompetitionData(): Promise<Competition> {
     };
 
     const participantRows = (participantsRes.data ?? []) as ParticipantRow[];
-    const balanceRows = (balanceRes.data ?? []) as BalancePointRow[];
     const positionRows = (positionsRes.data ?? []) as PositionRow[];
     const tickerRows = (tickersRes.data ?? []) as TickerRow[];
 
     const participants: Participant[] = participantRows.map((p) => {
-      const timeline = balanceRows
-        .filter((b) => b.participant_id === p.id)
-        .map((b) => ({ ts: b.ts, value: num(b.value) }))
-        .sort((a, b) => a.ts.localeCompare(b.ts));
-
       const positions: Position[] = positionRows
         .filter((q) => q.participant_id === p.id)
         .map((q) => ({
@@ -127,7 +118,9 @@ export async function getCompetitionData(): Promise<Competition> {
           instrument: q.instrument,
           lot: num(q.lot),
           exitPlan: q.exit_plan ?? "",
+          margin: num(q.margin),
           unrealizedPnl: num(q.unrealized_pnl),
+          realizedPnl: numOrNull(q.realized_pnl),
           status: q.status,
           openedAt: q.opened_at,
           closedAt: q.closed_at,
@@ -137,9 +130,8 @@ export async function getCompetitionData(): Promise<Competition> {
         name: p.name,
         color: p.color,
         avatar: p.avatar_url,
-        timeline,
+        startingDeposit: num(p.starting_deposit),
         positions,
-        availableCash: num(p.available_cash),
       };
     });
 

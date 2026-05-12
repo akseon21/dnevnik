@@ -2,9 +2,9 @@
 
 import { useActionState } from "react";
 import {
-  addBalancePoint,
-  addPosition,
-  closePosition,
+  openTrade,
+  updateTradePnl,
+  closeTrade,
   upsertParticipant,
   upsertTicker,
   upsertMeta,
@@ -19,8 +19,7 @@ const cardCls = "rounded-lg border border-border bg-panel p-4";
 
 function Status({ state }: { state: ActionResult | null }) {
   if (!state) return null;
-  if (state.ok)
-    return <p className="text-xs text-pos">{state.message ?? "Готово"}</p>;
+  if (state.ok) return <p className="text-xs text-pos">{state.message ?? "Готово"}</p>;
   return <p className="text-xs text-neg">{state.error ?? "Ошибка"}</p>;
 }
 
@@ -35,10 +34,7 @@ function Submit({ label }: { label: string }) {
   );
 }
 
-type Action = (
-  prev: ActionResult | null,
-  fd: FormData,
-) => Promise<ActionResult>;
+type Action = (prev: ActionResult | null, fd: FormData) => Promise<ActionResult>;
 
 function useFormAction(action: Action) {
   return useActionState<ActionResult | null, FormData>(action, null);
@@ -50,9 +46,9 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
   const openPositions = data?.openPositions ?? [];
   const meta = data?.meta ?? null;
 
-  const [bpState, bpAction] = useFormAction(addBalancePoint);
-  const [posState, posAction] = useFormAction(addPosition);
-  const [closeState, closeAction] = useFormAction(closePosition);
+  const [openState, openAction] = useFormAction(openTrade);
+  const [pnlState, pnlAction] = useFormAction(updateTradePnl);
+  const [closeState, closeAction] = useFormAction(closeTrade);
   const [pState, pAction] = useFormAction(upsertParticipant);
   const [tState, tAction] = useFormAction(upsertTicker);
   const [mState, mAction] = useFormAction(upsertMeta);
@@ -67,36 +63,16 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
 
   return (
     <div className="flex flex-col gap-5">
-      {/* ── Точка баланса ── */}
-      <section className={cardCls}>
-        <h2 className="mb-3 text-sm font-bold text-foreground">Добавить точку баланса</h2>
-        <form action={bpAction} className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1">
-            <span className={labelCls}>Участник</span>
-            <select name="participant_id" className={inputCls} required>
-              <option value="">—</option>
-              {participantOptions}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className={labelCls}>Дата/время</span>
-            <input type="datetime-local" name="ts" className={inputCls} required />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className={labelCls}>Баланс, $</span>
-            <input type="number" step="0.01" name="value" className={inputCls} required />
-          </label>
-          <Submit label="Добавить" />
-        </form>
-        <div className="mt-2">
-          <Status state={bpState} />
-        </div>
-      </section>
+      <p className="rounded-md border border-border bg-panel px-3 py-2 text-[11px] text-muted">
+        Сделко-центричная модель: баланс, equity и свободные средства считаются автоматически из
+        сделок. Руками задаются только стартовый депозит участника и сами сделки (открыть → обновить
+        плавающий PnL → закрыть с результатом).
+      </p>
 
-      {/* ── Позиция ── */}
+      {/* ── Открыть сделку ── */}
       <section className={cardCls}>
-        <h2 className="mb-3 text-sm font-bold text-foreground">Добавить позицию</h2>
-        <form action={posAction} className="flex flex-wrap items-end gap-3">
+        <h2 className="mb-3 text-sm font-bold text-foreground">Открыть сделку</h2>
+        <form action={openAction} className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1">
             <span className={labelCls}>Участник</span>
             <select name="participant_id" className={inputCls} required>
@@ -120,62 +96,98 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
             <input type="number" step="0.01" name="lot" className={inputCls} />
           </label>
           <label className="flex flex-col gap-1">
+            <span className={labelCls}>Маржа, $</span>
+            <input type="number" step="0.01" name="margin" className={inputCls} />
+          </label>
+          <label className="flex flex-col gap-1">
             <span className={labelCls}>План выхода</span>
             <input name="exit_plan" placeholder="TP 4720 / SL 4650" className={inputCls} />
           </label>
           <label className="flex flex-col gap-1">
-            <span className={labelCls}>PnL, $</span>
-            <input type="number" step="0.01" name="unrealized_pnl" className={inputCls} />
+            <span className={labelCls}>Открыта (необяз.)</span>
+            <input type="datetime-local" name="opened_at" className={inputCls} />
           </label>
-          <label className="flex flex-col gap-1">
-            <span className={labelCls}>Статус</span>
-            <select name="status" className={inputCls}>
-              <option value="open">open</option>
-              <option value="closed">closed</option>
-            </select>
-          </label>
-          <Submit label="Добавить" />
+          <Submit label="Открыть" />
         </form>
+        <p className="mt-2 text-[11px] text-muted">
+          Плавающий PnL при открытии = 0. Дату можно не указывать — поставится текущая.
+        </p>
         <div className="mt-2">
-          <Status state={posState} />
+          <Status state={openState} />
         </div>
+      </section>
 
-        {openPositions.length > 0 && (
-          <div className="mt-4 border-t border-border pt-3">
-            <h3 className="mb-2 text-xs font-semibold text-muted">Закрыть открытую позицию</h3>
-            <div className="flex flex-col gap-2">
-              {openPositions.map((q) => (
-                <form
-                  key={q.id}
-                  action={closeAction}
-                  className="flex flex-wrap items-center gap-2 text-xs"
-                >
-                  <input type="hidden" name="id" value={q.id} />
-                  <span className="text-foreground">
-                    {nameById(q.participant_id)} · {q.side} {q.instrument} · {q.lot} лот
-                  </span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    name="unrealized_pnl"
-                    placeholder="итоговый PnL"
-                    defaultValue={q.unrealized_pnl}
-                    className={inputCls + " w-32"}
-                  />
-                  <button
-                    type="submit"
-                    className="rounded-md border border-border px-2.5 py-1 text-xs text-foreground hover:border-neg hover:text-neg"
-                  >
-                    Закрыть
-                  </button>
-                </form>
-              ))}
-            </div>
-            <div className="mt-2">
-              <Status state={closeState} />
-            </div>
+      {/* ── Открытые сделки: обновить PnL / закрыть ── */}
+      <section className={cardCls}>
+        <h2 className="mb-3 text-sm font-bold text-foreground">Открытые сделки</h2>
+        {openPositions.length === 0 ? (
+          <p className="py-2 text-xs text-muted">Открытых сделок нет.</p>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {openPositions.map((q) => (
+              <div
+                key={q.id}
+                className="rounded-md border border-border/70 bg-background/40 p-3"
+              >
+                <div className="mb-2 text-xs font-semibold text-foreground">
+                  {nameById(q.participant_id)} · {q.side} {q.instrument} · {q.lot} лот · маржа $
+                  {q.margin}
+                </div>
+                <div className="flex flex-wrap items-end gap-4">
+                  {/* обновить плавающий PnL */}
+                  <form action={pnlAction} className="flex items-end gap-2">
+                    <input type="hidden" name="id" value={q.id} />
+                    <label className="flex flex-col gap-1">
+                      <span className={labelCls}>Текущий плавающий PnL, $</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        name="unrealized_pnl"
+                        defaultValue={q.unrealized_pnl}
+                        className={inputCls + " w-32"}
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      className="rounded-md border border-border px-2.5 py-1.5 text-xs text-foreground hover:border-accent hover:text-accent"
+                    >
+                      Обновить PnL
+                    </button>
+                  </form>
+                  {/* закрыть сделку */}
+                  <form action={closeAction} className="flex items-end gap-2">
+                    <input type="hidden" name="id" value={q.id} />
+                    <label className="flex flex-col gap-1">
+                      <span className={labelCls}>Итоговый результат, $</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        name="realized_pnl"
+                        placeholder="realized PnL"
+                        className={inputCls + " w-32"}
+                        required
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className={labelCls}>Закрыта (необяз.)</span>
+                      <input type="datetime-local" name="closed_at" className={inputCls} />
+                    </label>
+                    <button
+                      type="submit"
+                      className="rounded-md border border-border px-2.5 py-1.5 text-xs text-foreground hover:border-neg hover:text-neg"
+                    >
+                      Закрыть
+                    </button>
+                  </form>
+                </div>
+              </div>
+            ))}
           </div>
         )}
+        <div className="mt-3 flex flex-col gap-1">
+          <Status state={pnlState} />
+          <Status state={closeState} />
+        </div>
       </section>
 
       {/* ── Участники ── */}
@@ -201,11 +213,16 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
           </label>
           <label className="flex flex-col gap-1">
             <span className={labelCls}>Цвет</span>
-            <input type="color" name="color" defaultValue="#22d3ee" className={inputCls + " h-9 w-16 p-1"} />
+            <input
+              type="color"
+              name="color"
+              defaultValue="#22d3ee"
+              className={inputCls + " h-9 w-16 p-1"}
+            />
           </label>
           <label className="flex flex-col gap-1">
-            <span className={labelCls}>Свободные средства, $</span>
-            <input type="number" step="0.01" name="available_cash" className={inputCls} />
+            <span className={labelCls}>Стартовый депозит, $</span>
+            <input type="number" step="0.01" name="starting_deposit" className={inputCls} />
           </label>
           <label className="flex flex-col gap-1">
             <span className={labelCls}>Порядок</span>
@@ -214,9 +231,15 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
           <Submit label="Сохранить" />
         </form>
         <p className="mt-2 text-[11px] text-muted">
-          При выборе существующего участника всё равно заполните имя/цвет/средства — они
-          перезапишутся.
+          При выборе существующего участника всё равно заполните имя/цвет/депозит/порядок — они
+          перезапишутся. Стартовый депозит задаётся один раз; дальше баланс растёт от сделок.
         </p>
+        {participants.length > 0 && (
+          <p className="mt-1 text-[11px] text-muted">
+            Текущие:{" "}
+            {participants.map((p) => `${p.name} ($${p.starting_deposit})`).join(" · ")}
+          </p>
+        )}
         <div className="mt-2">
           <Status state={pState} />
         </div>
@@ -268,12 +291,7 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
           {meta && <input type="hidden" name="id" value={meta.id} />}
           <label className="flex flex-col gap-1">
             <span className={labelCls}>Название</span>
-            <input
-              name="title"
-              defaultValue={meta?.title ?? ""}
-              className={inputCls}
-              required
-            />
+            <input name="title" defaultValue={meta?.title ?? ""} className={inputCls} required />
           </label>
           <div className="flex flex-wrap gap-3">
             <label className="flex flex-col gap-1">
@@ -301,7 +319,7 @@ export default function AdminPanel({ data }: { data: AdminData | null }) {
             <span className={labelCls}>Пометка</span>
             <input
               name="note"
-              defaultValue={meta?.note ?? "Данные обновляются раз в день, в конце торгового дня"}
+              defaultValue={meta?.note ?? "Баланс и equity считаются автоматически из сделок"}
               className={inputCls}
             />
           </label>

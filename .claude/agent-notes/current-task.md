@@ -1,5 +1,69 @@
 # Текущий статус
 
+## v6 — РЕФАКТОР под сделко-центричную модель (2026-05-12)
+
+**Идея:** баланс / equity / свободные средства / timeline графика больше НЕ вводятся руками — они **вычисляются из сделок**. Руками задаются только `starting_deposit` участника и сами сделки (открыть → обновить плавающий PnL → закрыть с результатом).
+
+### Новая модель данных
+- **`Participant`** (lib/types.ts): `name`, `color`, `avatar`, **`startingDeposit`** (число, задаётся раз), **`positions`** (открытые + закрытые). Убрано: `timeline` (выводится), `availableCash` (вычисляется).
+- **`Position`**: `side` (LONG/SHORT), `instrument`, `lot`, `exitPlan`, **`margin`** (заблокированная сумма $, вводится при открытии), **`unrealizedPnl`** (текущий плавающий PnL пока открыта; 0 при открытии; для закрытой не используется), **`realizedPnl`** (number|null — финальный результат при закрытии), `status` ('open'|'closed'), `openedAt`, `closedAt`.
+- **`positionPnl(p)`** хелпер в lib/types.ts: closed → `realizedPnl ?? 0`, open → `unrealizedPnl`. Используется везде где раньше читали `pos.unrealizedPnl` для закрытой позиции (DashboardShell таблица закрытых, ParticipantModal закрытые/best/worst, EquityChart tradeTitle + цвет маркера).
+
+### Вычисляемые величины (lib/standings.ts, `getParticipantStats`)
+- `balance` (= `currentValue`, дубль `balance`) = `startingDeposit + Σ realizedPnl` всех закрытых
+- `equity` = `balance + Σ unrealizedPnl` всех открытых
+- `availableCash` = `balance − Σ margin` всех открытых
+- `changeAbs` = `balance − startingDeposit`, `changePct` = `(changeAbs/startingDeposit)*100`
+- `timeline` = `[(startDate+"T00:00:00", startingDeposit), затем по каждой закрытой позиции в порядке closedAt → (closedAt, running_balance)]`. Последняя точка = текущий balance. (Без дневных снимков — точек на закрытия + старт достаточно.)
+- `getParticipantSummary` — winRate/best/worst/avgPnl теперь по `realizedPnl` закрытых
+- `getFeedEvents` — pnl = `realizedPnl`
+- `getChartData` — теперь вызывает `getParticipantStats` внутри и строит rows из выведенных timeline (connectNulls на линиях, не у каждого участника точка в каждой строке)
+- `getLeaderboard` — по `changePct` (как было)
+- `formatMoney`/`formatSignedMoney` теперь `Math.round` значение (т.к. running_balance может быть дробным)
+
+### EquityChart — режим equity с новой моделью
+В режиме «По депозиту + нереализ. PnL» последняя числовая точка каждого участника с открытыми позициями приподнимается на `s.unrealizedPnl` (= Σ unrealizedPnl открытых). Проверено — работает: участники с открытыми позициями (Кирилл +103, Алексей +64, Павел −85, Lauris −35) видны приподнятыми; Руслан (нет открытых) — линии совпадают. Всё остальное (легенда-выделение, таймфреймы, маркеры закрытых сделок по closedAt, end-of-line аватары, draw-анимация, кликабельность линий/аватаров → модалка) — работает.
+
+### Дашборд
+- Компактные карточки участников: `formatMoney(s.currentValue)` = balance, `changePct` — как было.
+- ParticipantModal: добавлена сетка «Баланс / Equity / Свободные средства» (3 `Metric`) между шапкой и блоком статистики; убран дублирующий футер «Свободные средства» внизу. Шапка показывает balance + changePct + changeAbs. Статистика (винрейт и т.д.) — пересчитана на realizedPnl закрытых.
+- Лидерборд — `changePct` = `balance/startingDeposit − 1`.
+- EventTicker (бегущая строка) — «{имя} закрыл {LONG/SHORT} {инструмент} {±$X}», X = realizedPnl, сортировка по closedAt.
+- DashboardShell таб «Открытые позиции» — карточка участника + таблица открытых (unrealizedPnl) + «Свободные средства» (теперь вычислено). Таб «Закрытые сделки» — таблица с результатом = `positionPnl` (realizedPnl).
+- page.tsx RULES_TEXT переписан под новую модель (баланс/equity/свободные средства из сделок); `note` дефолт = «Баланс и equity считаются автоматически из сделок».
+
+### Админка `/admin` — переделана под сделки
+- **Открыть сделку**: участник + side + инструмент + лот + маржа($) + план выхода + (необяз.) дата открытия → INSERT status='open', unrealized_pnl=0, realized_pnl=null, opened_at=дата|now.
+- **Открытые сделки** (список): по каждой — форма «Обновить плавающий PnL» (UPDATE unrealized_pnl, .eq status='open') + форма «Закрыть» (realized_pnl обязателен, closed_at=дата|now → UPDATE status='closed', realized_pnl, closed_at, unrealized_pnl=0). Маржа освобождается автоматически (позиция перестаёт учитываться в Σ margin).
+- **Участники**: имя / цвет / **стартовый депозит** / порядок. Формы «точка баланса» — УБРАНЫ (timeline выводится из сделок).
+- **Тикеры**, **Параметры соревнования** — как было.
+- Server actions: `openTrade`, `updateTradePnl`, `closeTrade`, `upsertParticipant` (теперь `starting_deposit`), `upsertTicker`, `upsertMeta` — все через `guarded` (auth + hasServiceRole + revalidatePath("/")). Убраны: `addBalancePoint`, `addPosition`, `closePosition` (старые), вотчлист-actions (уже были убраны в v4).
+- `getAdminData` теперь возвращает participants с `starting_deposit` и openPositions с `margin`.
+- (Не делал bulk-закрытие — опционально, не критично.)
+
+### Миграции Supabase — НАДО ПРОГНАТЬ
+1. **`supabase/migrations/0003_trade_centric.sql`** — `ALTER TABLE participants ADD COLUMN starting_deposit`; `ALTER TABLE positions ADD COLUMN margin, ADD COLUMN realized_pnl` (idempotent, `IF NOT EXISTS`). `available_cash` оставлена но не используется. `balance_points` оставлена но не используется. RLS не трогает.
+2. **`supabase/migrations/0003b_seed.sql`** — DELETE всего + перезалив плейсхолдеров под новую модель (5 участников с starting_deposit, у каждого 3-4 closed позиции с realized_pnl + closed_at для timeline, 0-2 open позиции с margin + unrealized_pnl). Синхронизирован с `data/competition.ts`. Прогнать ПОСЛЕ 0003.
+- Прогон через Supabase SQL Editor (нет supabase CLI). 0001 и 0002 — по прошлым заметкам ещё не прогнаны; если БД сырая — прогнать всё по порядку: 0001 → 0002 → 0003 → 0003b.
+- **Graceful**: lib/db.ts — если запрос к positions/participants падает (включая `column starting_deposit does not exist` = старая схема) → fallback на `data/competition.ts`. Проверено: текущая прод-БД ещё со старой схемой → build/dev читают статику, дашборд не падает. После прогона 0003+0003b — дашборд начнёт читать БД.
+
+### Валидация v6
+- `npm run lint` — чисто (0 проблем).
+- `npm run build` — чисто (TS OK). В логе build: `[db] ... column participants.starting_deposit does not exist ... falling back to static` — ожидаемо (прод-БД ещё старая), это и есть graceful. Маршруты: `/` ƒ, `/admin` ƒ, `/api/tickers` ○ 5m.
+- `npm run dev` (порт 4864) — `/` → 200, `/admin` → 200. В HTML `/`: «Реалити-торговля: 2 недели», «закрыл» (события из realizedPnl), «По депозиту + нереализ. PnL» (режим equity), «Лидерборд», «Свободные средства». Только обычный recharts SSR width(-1)/height(-1) warning.
+- Запушено в `origin/main` → Vercel автодеплой.
+
+### v7 / открытые вопросы
+- **Прогнать `0003_trade_centric.sql` + `0003b_seed.sql`** (после 0001/0002 если БД сырая) через Supabase SQL Editor. Без этого дашборд работает на `data/competition.ts` (новая модель уже там).
+- **Реальные участники + стартовые депозиты** — заменить плейсхолдеры (5 имён, депозиты 1000-1500). Либо через /admin (форма «Участники» + стартовый депозит), либо в `data/competition.ts` + `0003b_seed.sql`.
+- **Правила в табе «О соревновании»** — RULES_TEXT в page.tsx переписан под модель, но текст можно подправить под реальные условия соревнования.
+- Bulk-вид быстрого закрытия нескольких сделок — не делал (опционально).
+- Авто-расчёт маржи из лот×плечо — НЕ делал по запрету (вводится вручную).
+- Старые таблицы `balance_points` (0001) и `watchlist` (0002) в БД остаются, не используются — можно дропнуть отдельной миграцией если захочется чистоты.
+- Светлая тема, реальный 24h FX, Finnhub-ключ для металлов — всё ещё отложено.
+
+---
+
 ## v5.2 — кликабельные линии/аватары на графике → модалка участника (2026-05-12)
 - `app/components/EquityChart.tsx`: новый опциональный проп `onParticipantClick?: (participantName: string) => void`.
   - У каждой `<Line>` участника: `onClick={() => onParticipantClick(l.name)}` + `style={{ cursor: 'pointer' }}` (только когда проп передан). recharts 3.x `<Line>` поддерживает `onClick` (через `CurveMouseEvents`) и `style` (через `PresentationAttributesWithProps`). Кликабельна сама линия (path stroke), узкая зона ~ширине линии — приемлемо.

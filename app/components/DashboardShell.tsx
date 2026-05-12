@@ -14,7 +14,7 @@ import {
   type ChartRow,
   type ParticipantStat,
 } from "@/lib/standings";
-import type { Position } from "@/lib/types";
+import { positionPnl, type Position } from "@/lib/types";
 
 type LineMeta = { name: string; color: string };
 
@@ -122,7 +122,7 @@ function PositionsTable({
                 </td>
               )}
               <td className="py-1.5 text-right">
-                <PnlText value={row.pos.unrealizedPnl} />
+                <PnlText value={closed ? positionPnl(row.pos) : row.pos.unrealizedPnl} />
               </td>
             </tr>
           ))}
