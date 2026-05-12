@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   LineChart,
   Line,
@@ -116,9 +116,20 @@ function tradeTitle(owner: string, pos: Position): string {
   return `${owner}: ${dir} ${pos.instrument} · ${pos.lot} лот · ${formatSignedMoney(pos.unrealizedPnl)}${range}`;
 }
 
+const LINE_ANIM_MS = 1100;
+
 export default function EquityChart({ rows, lines, stats }: Props) {
   const [highlight, setHighlight] = useState<string | null>(null);
   const [tf, setTf] = useState<TimeframeKey>("all");
+
+  // линии «прорисовываются» слева направо; маркеры/аватары появляются после этого.
+  // храним tf, для которого анимация уже завершилась — без синхронного setState в эффекте.
+  const [drawnFor, setDrawnFor] = useState<TimeframeKey | null>(null);
+  useEffect(() => {
+    const id = setTimeout(() => setDrawnFor(tf), LINE_ANIM_MS);
+    return () => clearTimeout(id);
+  }, [tf]);
+  const drawn = drawnFor === tf;
 
   // диапазон данных, чтобы дизейблить лишние таймфреймы
   const spanDays = useMemo(() => {
@@ -254,7 +265,9 @@ export default function EquityChart({ rows, lines, stats }: Props) {
               strokeOpacity={highlight !== null ? 0.15 : 1}
               dot={false}
               activeDot={false}
-              isAnimationActive={false}
+              isAnimationActive
+              animationDuration={LINE_ANIM_MS}
+              animationEasing="ease-out"
             />
             {lines.map((l) => (
               <Line
@@ -267,10 +280,12 @@ export default function EquityChart({ rows, lines, stats }: Props) {
                 dot={dim(l.name) ? false : { r: 2, fill: l.color, strokeWidth: 0 }}
                 activeDot={dim(l.name) ? false : { r: 4 }}
                 connectNulls
-                isAnimationActive={false}
+                isAnimationActive
+                animationDuration={LINE_ANIM_MS}
+                animationEasing="ease-out"
               />
             ))}
-            {tradeMarkers.map((m) => {
+            {drawn && tradeMarkers.map((m) => {
               const positive = m.pos.unrealizedPnl >= 0;
               return (
                 <ReferenceDot
@@ -287,7 +302,7 @@ export default function EquityChart({ rows, lines, stats }: Props) {
                 />
               );
             })}
-            {endPoints.map(
+            {drawn && endPoints.map(
               (ep) =>
                 ep && (
                   <ReferenceDot

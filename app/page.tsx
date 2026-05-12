@@ -4,11 +4,13 @@ import {
   getParticipantStats,
   getLeaderboard,
   getChartData,
+  getFeedEvents,
   formatTs,
 } from "@/lib/standings";
 import DashboardShell from "./components/DashboardShell";
 import Leaderboard from "./components/Leaderboard";
 import TickerStrip from "./components/TickerStrip";
+import EventTicker from "./components/EventTicker";
 
 const RULES_TEXT = `Реалити-торговля сообщества: участники торгуют форекс-инструменты (золото, серебро, валютные пары) и публично показывают динамику своего депозита.
 
@@ -30,8 +32,10 @@ export default async function Home() {
     name: p.name,
     color: p.color,
   }));
+  const feedEvents = getFeedEvents(competition);
 
   const periodLabel = `${formatTs(competition.startDate)} — ${formatTs(competition.endDate)}`;
+  const eventStartLabel = `Соревнование стартует ${formatTs(competition.startDate)}`;
 
   return (
     <main className="mx-auto flex min-h-full max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6">
@@ -64,6 +68,9 @@ export default async function Home() {
       {/* ─── Верхняя строка тикеров (авто-обновление через /api/tickers) ─── */}
       <TickerStrip initial={competition.tickers} />
 
+      {/* ─── Бегущая лента событий (закрытые сделки) ─── */}
+      <EventTicker events={feedEvents} startLabel={eventStartLabel} />
+
       {/* ─── Интерактивная часть: фильтр + график + участники + табы ─── */}
       <DashboardShell
         stats={stats}
@@ -71,6 +78,8 @@ export default async function Home() {
         lines={lines}
         note={competition.note}
         rulesText={RULES_TEXT}
+        startDate={competition.startDate}
+        endDate={competition.endDate}
       />
 
       <footer className="pt-2 text-center text-[10px] text-muted">

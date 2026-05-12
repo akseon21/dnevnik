@@ -1,4 +1,9 @@
-import type { Competition, Participant, Position } from "@/lib/types";
+import type {
+  Competition,
+  Participant,
+  Position,
+  TimelinePoint,
+} from "@/lib/types";
 
 export type ParticipantStat = {
   name: string;
@@ -9,6 +14,7 @@ export type ParticipantStat = {
   changeAbs: number;
   changePct: number;
   availableCash: number;
+  timeline: TimelinePoint[]; // динамика баланса (для спарклайнов / статистики)
   openPositions: Position[];
   closedPositions: Position[];
   unrealizedPnl: number; // сумма unrealizedPnl по открытым позициям
@@ -42,11 +48,68 @@ export function getParticipantStats(competition: Competition): ParticipantStat[]
       changeAbs,
       changePct,
       availableCash: p.availableCash,
+      timeline: p.timeline,
       openPositions,
       closedPositions,
       unrealizedPnl,
     };
   });
+}
+
+// ── статистика участника (винрейт, лучшая/худшая сделка, средний PnL) ─────────
+export type ParticipantSummary = {
+  winRate: number | null; // % закрытых сделок с PnL ≥ 0; null если закрытых нет
+  totalTrades: number; // открытые + закрытые
+  closedCount: number;
+  best: Position | null; // закрытая позиция с максимальным PnL
+  worst: Position | null; // закрытая позиция с минимальным PnL
+  avgPnl: number | null; // средний PnL по закрытым сделкам; null если закрытых нет
+};
+
+export function getParticipantSummary(stat: ParticipantStat): ParticipantSummary {
+  const closed = stat.closedPositions;
+  const closedCount = closed.length;
+  const totalTrades = stat.openPositions.length + closedCount;
+  if (closedCount === 0) {
+    return { winRate: null, totalTrades, closedCount: 0, best: null, worst: null, avgPnl: null };
+  }
+  const wins = closed.filter((p) => p.unrealizedPnl >= 0).length;
+  const winRate = (wins / closedCount) * 100;
+  const sorted = [...closed].sort((a, b) => b.unrealizedPnl - a.unrealizedPnl);
+  const best = sorted[0];
+  const worst = sorted[sorted.length - 1];
+  const avgPnl = closed.reduce((s, p) => s + p.unrealizedPnl, 0) / closedCount;
+  return { winRate, totalTrades, closedCount, best, worst, avgPnl };
+}
+
+// ── события для бегущей ленты: последние закрытые сделки всех участников ───────
+export type FeedEvent = {
+  owner: string;
+  color: string;
+  side: Position["side"];
+  instrument: string;
+  pnl: number;
+  closedAt: string;
+};
+
+export function getFeedEvents(competition: Competition, limit = 12): FeedEvent[] {
+  const events: FeedEvent[] = [];
+  for (const p of competition.participants) {
+    for (const pos of p.positions) {
+      if (pos.status !== "closed" || !pos.closedAt) continue;
+      events.push({
+        owner: p.name,
+        color: p.color,
+        side: pos.side,
+        instrument: pos.instrument,
+        pnl: pos.unrealizedPnl,
+        closedAt: pos.closedAt,
+      });
+    }
+  }
+  // новые слева → сортируем по closedAt по убыванию
+  events.sort((a, b) => (a.closedAt < b.closedAt ? 1 : a.closedAt > b.closedAt ? -1 : 0));
+  return events.slice(0, limit);
 }
 
 export function getLeaderAndOutsider(stats: ParticipantStat[]): {

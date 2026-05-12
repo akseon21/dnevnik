@@ -1,5 +1,32 @@
 # Текущий статус
 
+## v5 — ГОТОВ (2026-05-12) — 6 улучшений
+
+Все 6 пунктов сделаны полностью.
+
+1. **Статистика участника в модалке.** `lib/standings.ts` — новый тип `ParticipantSummary` + `getParticipantSummary(stat)`: винрейт (% закрытых с PnL≥0; null если закрытых 0), totalTrades (открытые+закрытые), closedCount, best/worst (закрытая позиция с max/min PnL), avgPnl (среднее по закрытым; null если 0). В `ParticipantStat` добавлено поле `timeline` (нужно и для спарклайнов). `ParticipantModal.tsx` — новый блок «Статистика» между шапкой и «Открытые позиции»: компактная сетка `<Metric>` (grid 2/3 кол.), тёмный терминальный стиль. Винрейт зел/красн по ≥50%. «—» для пустых. Рост от старта НЕ дублирую (уже в шапке).
+2. **Лента событий (бегущая строка).** `lib/standings.ts` — `getFeedEvents(competition, limit=12)`: собирает закрытые позиции всех участников (owner/color/side/instrument/pnl/closedAt), сортирует по closedAt по убыванию (новые слева), slice(limit). Новый компонент `app/components/EventTicker.tsx` (client): «{имя} закрыл {LONG/SHORT} {инструмент} {±$X}», цвет суммы зел/красн. CSS-marquee — два одинаковых `.marquee-track` подряд для бесшовного цикла, `@keyframes marquee` translateX(0→-50%), 40s linear infinite, пауза при `:hover` (`.marquee-wrap:hover`), `prefers-reduced-motion` → без анимации. Если событий нет → строка `startLabel` («Соревнование стартует {дата}»), если и его нет → null. Рендерится в `page.tsx` под `<TickerStrip>`. Keyframes в `app/globals.css`.
+3. **Обратный отсчёт.** Новый `app/components/Countdown.tsx` (client): `useState(() => Date.now())` + `setInterval` раз в минуту, `suppressHydrationWarning`. Логика: now<startDate → «Старт через N дней»; now≥endDate(+24ч, конец дня) → «Соревнование завершено»; иначе «До конца: N дней» (если ≥сутки) или «До конца: H ч M мин». Русская плюрализация день/дня/дней. Цвет: акцент когда идёт, muted иначе. Рендерится в тулбаре `DashboardShell` рядом с фильтром участников (передаются `startDate`/`endDate` из `page.tsx`).
+4. **Спарклайны в компактном ряду.** Новый `app/components/Sparkline.tsx` (server-renderable, без «use client»): ручной SVG-path по `timeline` значениям, 80×24px, нормализация min/max, `stroke=color участника`, без осей/подписей/интеракции, `preserveAspectRatio="none"`. В `DashboardShell` компактные карточки участников — `<Sparkline timeline={s.timeline} color={s.color} className="hidden shrink-0 sm:block" />` (на мобиле скрыт). `<2` точек → не рендерится.
+5. **Цветная рамка карточки.** Компактные карточки в `DashboardShell` — `border-l-[3px]` + inline `style={{ borderLeftColor: s.color }}` (цвет линии участника). В `ParticipantModal` — `absolute inset-x-0 top-0 h-1` полоска цвета `stat.color` вверху панели.
+6. **Анимация рисования линий.** `EquityChart.tsx` — у `<Line>` (и `__avg`, и линий участников) `isAnimationActive animationDuration={1100} animationEasing="ease-out"`. Маркеры закрытых сделок (`tradeMarkers`) и end-of-line кружки-аватары (`endPoints` ReferenceDot) рендерятся только когда `drawn` — флаг через `useState<TimeframeKey|null> drawnFor` + `useEffect` с `setTimeout(1100ms)` → `setDrawnFor(tf)`, `drawn = drawnFor === tf` (без синхронного setState в эффекте — обход `react-hooks/set-state-in-effect`). При смене таймфрейма анимация переигрывается, маркеры снова появляются с задержкой. Легенда снизу (использует `endPoints` напрямую) — не gated, видна сразу.
+
+### Валидация v5
+- `npm run lint` — чисто (обошёл `react-hooks/purity` в page.tsx — убрал `Date.now()` из server-render, всегда передаю `eventStartLabel`; обошёл `react-hooks/set-state-in-effect` в EquityChart — паттерн `drawnFor`).
+- `npm run build` — чисто (TypeScript OK). Маршруты без изменений: `/` ƒ, `/admin` ƒ, `/api/tickers` ○ 5m.
+- `npm run dev` (порт 4231) — `/` → 200, `/admin` → 200. В SSR-HTML `/`: `marquee-track` (×2), «закрыл» (события), «Старт через 1 день» (отсчёт — сегодня 12.05, старт 13.05), `<svg viewBox="0 0 80 24">` (спарклайны). Только обычный recharts SSR width(-1)/height(-1) warning.
+- Деплой: запушено в `origin/main` → Vercel автодеплой.
+
+### v6 / открытые вопросы (v5)
+- Светлая тема — всё ещё отложена.
+- Реальный 24h change для FX-пар (Frankfurter не даёт) — открыто.
+- v3.5 — fallback для металлов (goldprice.org) на проде Vercel → бесплатный Finnhub-ключ.
+- Открытые вопросы v2/v3 в силе: реальные имена участников + стартовые депозиты, реальное название/даты, точный список тикеров, фото-аватары.
+- Возможный draw-on эффект для линий через stroke-dashoffset (CSS на path'ах) — сейчас используется штатная recharts-анимация, её достаточно.
+- Не делали (по запрету в задаче): resizable, экспорт PNG, фото-аватары, светлая тема, реальный 24h FX.
+
+---
+
 ## v4 — ГОТОВ (2026-05-12) — пакет UX-улучшений
 
 7 пунктов, все сделаны:

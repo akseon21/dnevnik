@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import EquityChart from "./EquityChart";
 import ParticipantModal from "./ParticipantModal";
+import Countdown from "./Countdown";
+import Sparkline from "./Sparkline";
 import {
   formatMoney,
   formatPct,
@@ -22,6 +24,8 @@ type Props = {
   lines: LineMeta[];
   note: string;
   rulesText: string;
+  startDate: string;
+  endDate: string;
 };
 
 type TabKey = "open" | "closed" | "about";
@@ -134,6 +138,8 @@ export default function DashboardShell({
   lines,
   note,
   rulesText,
+  startDate,
+  endDate,
 }: Props) {
   const allNames = useMemo(() => stats.map((s) => s.name), [stats]);
   const [selected, setSelected] = useState<string[]>(allNames);
@@ -160,10 +166,12 @@ export default function DashboardShell({
 
   return (
     <>
-      {/* ─── Тулбар: пометка + фильтр участников ─── */}
+      {/* ─── Тулбар: пометка + отсчёт + фильтр участников ─── */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-[11px] text-muted">📊 {note}</span>
-        <div className="relative">
+        <div className="flex items-center gap-2">
+          <Countdown startDate={startDate} endDate={endDate} />
+          <div className="relative">
           <button
             type="button"
             onClick={() => setFilterOpen((v) => !v)}
@@ -204,6 +212,7 @@ export default function DashboardShell({
               </div>
             </div>
           )}
+          </div>
         </div>
       </div>
 
@@ -233,7 +242,8 @@ export default function DashboardShell({
             key={s.name}
             type="button"
             onClick={() => setModalName(s.name)}
-            className="flex items-center gap-2 rounded-lg border border-border bg-panel px-2.5 py-2 text-left transition hover:border-accent/50"
+            className="flex items-center gap-2 rounded-lg border border-l-[3px] border-border bg-panel px-2.5 py-2 text-left transition hover:border-accent/50"
+            style={{ borderLeftColor: s.color }}
           >
             <span
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
@@ -252,6 +262,11 @@ export default function DashboardShell({
                 </span>
               </span>
             </span>
+            <Sparkline
+              timeline={s.timeline}
+              color={s.color}
+              className="hidden shrink-0 sm:block"
+            />
           </button>
         ))}
       </section>

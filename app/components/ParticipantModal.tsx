@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   formatMoney,
   formatPct,
   formatSignedMoney,
   formatTs,
+  getParticipantSummary,
   initials,
   type ParticipantStat,
 } from "@/lib/standings";
@@ -98,6 +99,77 @@ function ClosedTrades({ positions }: { positions: Position[] }) {
   );
 }
 
+function Metric({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-md border border-border/70 bg-background/40 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+      <div className="mt-0.5 text-sm font-semibold text-foreground">{children}</div>
+    </div>
+  );
+}
+
+function StatsBlock({ stat }: { stat: ParticipantStat }) {
+  const s = getParticipantSummary(stat);
+  const dash = "—";
+  return (
+    <section className="mb-4">
+      <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+        Статистика
+      </h3>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <Metric label="Винрейт">
+          {s.winRate === null ? (
+            <span className="text-muted">{dash}</span>
+          ) : (
+            <span className={s.winRate >= 50 ? "text-pos" : "text-neg"}>
+              {s.winRate.toFixed(0)}%
+            </span>
+          )}
+        </Metric>
+        <Metric label="Всего сделок">
+          <span className="tabular-nums">{s.totalTrades}</span>
+        </Metric>
+        <Metric label="Закрытых сделок">
+          <span className="tabular-nums">{s.closedCount}</span>
+        </Metric>
+        <Metric label="Лучшая сделка">
+          {s.best ? (
+            <span className="flex items-baseline gap-1.5">
+              <span className="text-foreground">{s.best.instrument}</span>
+              <PnlText value={s.best.unrealizedPnl} />
+            </span>
+          ) : (
+            <span className="text-muted">{dash}</span>
+          )}
+        </Metric>
+        <Metric label="Худшая сделка">
+          {s.worst ? (
+            <span className="flex items-baseline gap-1.5">
+              <span className="text-foreground">{s.worst.instrument}</span>
+              <PnlText value={s.worst.unrealizedPnl} />
+            </span>
+          ) : (
+            <span className="text-muted">{dash}</span>
+          )}
+        </Metric>
+        <Metric label="Средний PnL / сделку">
+          {s.avgPnl === null ? (
+            <span className="text-muted">{dash}</span>
+          ) : (
+            <PnlText value={Math.round(s.avgPnl)} />
+          )}
+        </Metric>
+      </div>
+    </section>
+  );
+}
+
 export default function ParticipantModal({
   stat,
   onClose,
@@ -135,8 +207,13 @@ export default function ParticipantModal({
         role="dialog"
         aria-modal="true"
         aria-label={`Детали участника ${stat.name}`}
-        className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-y-auto rounded-t-xl border border-border bg-panel p-5 shadow-2xl outline-none sm:rounded-xl"
+        className="relative flex max-h-[92vh] w-full max-w-2xl flex-col overflow-y-auto rounded-t-xl border border-border bg-panel p-5 shadow-2xl outline-none sm:rounded-xl"
       >
+        {/* цветная полоска = цвет линии участника */}
+        <div
+          className="absolute inset-x-0 top-0 h-1 rounded-t-xl"
+          style={{ background: stat.color }}
+        />
         {/* шапка */}
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -168,6 +245,9 @@ export default function ParticipantModal({
             ✕
           </button>
         </div>
+
+        {/* статистика */}
+        <StatsBlock stat={stat} />
 
         {/* открытые позиции */}
         <section className="mb-4">
