@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import EquityChart from "./EquityChart";
+import ParticipantModal from "./ParticipantModal";
 import {
   formatMoney,
   formatPct,
@@ -11,7 +12,7 @@ import {
   type ChartRow,
   type ParticipantStat,
 } from "@/lib/standings";
-import type { Position, WatchlistItem } from "@/lib/types";
+import type { Position } from "@/lib/types";
 
 type LineMeta = { name: string; color: string };
 
@@ -21,15 +22,13 @@ type Props = {
   lines: LineMeta[];
   note: string;
   rulesText: string;
-  watchlist: WatchlistItem[];
 };
 
-type TabKey = "open" | "closed" | "watchlist" | "about";
+type TabKey = "open" | "closed" | "about";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "open", label: "Открытые позиции" },
   { key: "closed", label: "Закрытые сделки" },
-  { key: "watchlist", label: "Список наблюдения" },
   { key: "about", label: "О соревновании" },
 ];
 
@@ -129,60 +128,25 @@ function PositionsTable({
   );
 }
 
-function WatchlistTable({ items }: { items: WatchlistItem[] }) {
-  if (items.length === 0) {
-    return (
-      <p className="py-3 text-center text-xs text-muted">
-        Список наблюдения пуст
-      </p>
-    );
-  }
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead>
-          <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
-            <th className="py-1 pr-2 font-medium">Инструмент</th>
-            <th className="py-1 pr-2 font-medium">Кто присматривает</th>
-            <th className="py-1 font-medium">Комментарий</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((w, i) => (
-            <tr key={i} className="border-t border-border/60">
-              <td className="py-1.5 pr-2 font-semibold text-foreground">
-                {w.instrument}
-              </td>
-              <td className="py-1.5 pr-2 text-muted">
-                {w.participantNames.length > 0 ? w.participantNames.join(", ") : "—"}
-              </td>
-              <td className="py-1.5 text-muted">{w.note || "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 export default function DashboardShell({
   stats,
   rows,
   lines,
   note,
   rulesText,
-  watchlist,
 }: Props) {
   const allNames = useMemo(() => stats.map((s) => s.name), [stats]);
   const [selected, setSelected] = useState<string[]>(allNames);
   const [filterOpen, setFilterOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>("open");
+  const [modalName, setModalName] = useState<string | null>(null);
 
   const isAll = selected.length === allNames.length;
   const visible = (name: string) => selected.includes(name);
 
   const shownStats = stats.filter((s) => visible(s.name));
   const shownLines = lines.filter((l) => visible(l.name));
+  const modalStat = stats.find((s) => s.name === modalName) ?? null;
 
   function toggle(name: string) {
     setSelected((cur) =>
@@ -209,7 +173,7 @@ export default function DashboardShell({
             <span className="ml-1.5 text-muted">▾</span>
           </button>
           {filterOpen && (
-            <div className="absolute right-0 z-20 mt-1 w-52 rounded-md border border-border bg-panel p-2 shadow-lg">
+            <div className="absolute right-0 z-30 mt-1 w-52 rounded-md border border-border bg-panel p-2 shadow-lg">
               <button
                 type="button"
                 onClick={() => setSelected(isAll ? [] : allNames)}
@@ -243,154 +207,145 @@ export default function DashboardShell({
         </div>
       </div>
 
-      {/* ─── Главная сетка: график (лево) + панель участников (право) ─── */}
-      <div className="grid gap-4 lg:grid-cols-[1.6fr_1fr]">
-        {/* Левая колонка */}
-        <div className="flex flex-col gap-4">
-          <section className="rounded-lg border border-border bg-panel p-4">
-            <div className="mb-2 flex items-baseline justify-between">
-              <h2 className="text-sm font-bold tracking-tight text-foreground">
-                Общий баланс счёта
-              </h2>
-              <span className="text-[10px] uppercase tracking-widest text-muted">
-                пунктир — среднее по участникам
-              </span>
-            </div>
-            {shownLines.length === 0 ? (
-              <p className="py-12 text-center text-sm text-muted">
-                Выберите участников в фильтре
-              </p>
-            ) : (
-              <EquityChart rows={rows} lines={shownLines} />
-            )}
-          </section>
+      {/* ─── График на всю ширину ─── */}
+      <section className="rounded-lg border border-border bg-panel p-3 sm:p-4">
+        <div className="mb-2 flex items-baseline justify-between gap-2">
+          <h2 className="text-sm font-bold tracking-tight text-foreground">
+            Общий баланс счёта
+          </h2>
+          <span className="hidden text-[10px] uppercase tracking-widest text-muted sm:inline">
+            пунктир — среднее по участникам
+          </span>
+        </div>
+        {shownLines.length === 0 ? (
+          <p className="py-12 text-center text-sm text-muted">
+            Выберите участников в фильтре
+          </p>
+        ) : (
+          <EquityChart rows={rows} lines={shownLines} stats={shownStats} />
+        )}
+      </section>
 
-          {/* Нижняя строка — сводные карточки */}
-          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      {/* ─── Компактный ряд участников ─── */}
+      <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        {shownStats.map((s) => (
+          <button
+            key={s.name}
+            type="button"
+            onClick={() => setModalName(s.name)}
+            className="flex items-center gap-2 rounded-lg border border-border bg-panel px-2.5 py-2 text-left transition hover:border-accent/50"
+          >
+            <span
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
+              style={{ borderColor: s.color, color: s.color }}
+            >
+              {initials(s.name)}
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col leading-tight">
+              <span className="truncate text-xs font-semibold text-foreground">{s.name}</span>
+              <span className="flex items-baseline gap-1.5">
+                <span className="tabular-nums text-xs text-foreground">
+                  {formatMoney(s.currentValue)}
+                </span>
+                <span className="text-[10px]">
+                  <ChangeText value={s.changePct} />
+                </span>
+              </span>
+            </span>
+          </button>
+        ))}
+      </section>
+
+      {/* ─── Табы ─── */}
+      <section className="flex flex-col gap-3">
+        <div className="flex gap-1 overflow-x-auto rounded-lg border border-border bg-panel p-1">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={`flex-1 whitespace-nowrap rounded px-3 py-1.5 text-[11px] font-medium transition sm:text-xs ${
+                tab === t.key
+                  ? "bg-accent/15 text-accent"
+                  : "text-muted hover:text-foreground"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "open" && (
+          <div className="grid gap-3 sm:grid-cols-2">
             {shownStats.map((s) => (
               <div
                 key={s.name}
-                className="flex flex-col gap-2 rounded-lg border border-border bg-panel p-3"
+                className="rounded-lg border border-border bg-panel p-3"
               >
-                <div className="flex items-center gap-2">
-                  <span
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
-                    style={{ borderColor: s.color, color: s.color }}
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setModalName(s.name)}
+                    className="flex items-center gap-2 text-left hover:opacity-80"
                   >
-                    {initials(s.name)}
-                  </span>
-                  <span className="truncate text-xs font-semibold text-foreground">
-                    {s.name}
-                  </span>
+                    <span
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
+                      style={{ borderColor: s.color, color: s.color }}
+                    >
+                      {initials(s.name)}
+                    </span>
+                    <span className="text-sm font-semibold text-foreground">{s.name}</span>
+                  </button>
+                  {s.openPositions.length > 0 ? (
+                    <span className="text-xs">
+                      <span className="text-muted">PnL: </span>
+                      <PnlText value={s.unrealizedPnl} />
+                    </span>
+                  ) : (
+                    <span className="text-xs">
+                      <span className="tabular-nums text-foreground">
+                        {formatMoney(s.currentValue)}
+                      </span>{" "}
+                      <ChangeText value={s.changePct} />
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-baseline justify-between">
-                  <span className="tabular-nums text-sm font-bold text-foreground">
-                    {formatMoney(s.currentValue)}
+                {s.openPositions.length > 0 && (
+                  <div className="mt-2">
+                    <PositionsTable positions={s.openPositions.map((pos) => ({ pos }))} />
+                  </div>
+                )}
+                <div className="mt-2 flex justify-end border-t border-border/60 pt-2 text-xs">
+                  <span className="text-muted">Свободные средства:&nbsp;</span>
+                  <span className="tabular-nums text-foreground">
+                    {formatMoney(s.availableCash)}
                   </span>
-                  <ChangeText value={s.changePct} />
                 </div>
               </div>
             ))}
-          </section>
-        </div>
-
-        {/* Правая колонка — табы + карточки участников */}
-        <div className="flex flex-col gap-4">
-          {/* Табы */}
-          <div className="flex flex-wrap gap-1 rounded-lg border border-border bg-panel p-1">
-            {TABS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                className={`flex-1 whitespace-nowrap rounded px-2.5 py-1.5 text-[11px] font-medium transition ${
-                  tab === t.key
-                    ? "bg-accent/15 text-accent"
-                    : "text-muted hover:text-foreground"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
           </div>
+        )}
 
-          {tab === "open" && (
-            <div className="flex flex-col gap-3">
-              {shownStats.map((s) => (
-                <div
-                  key={s.name}
-                  className="rounded-lg border border-border bg-panel p-3"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
-                        style={{ borderColor: s.color, color: s.color }}
-                      >
-                        {initials(s.name)}
-                      </span>
-                      <span className="text-sm font-semibold text-foreground">
-                        {s.name}
-                      </span>
-                    </div>
-                    {s.openPositions.length > 0 ? (
-                      <span className="text-xs">
-                        <span className="text-muted">Текущая прибыль/убыток: </span>
-                        <PnlText value={s.unrealizedPnl} />
-                      </span>
-                    ) : (
-                      <span className="text-xs">
-                        <span className="tabular-nums text-foreground">
-                          {formatMoney(s.currentValue)}
-                        </span>{" "}
-                        <ChangeText value={s.changePct} />
-                      </span>
-                    )}
-                  </div>
-                  {s.openPositions.length > 0 && (
-                    <div className="mt-2">
-                      <PositionsTable
-                        positions={s.openPositions.map((pos) => ({ pos }))}
-                      />
-                    </div>
-                  )}
-                  <div className="mt-2 flex justify-end border-t border-border/60 pt-2 text-xs">
-                    <span className="text-muted">Свободные средства:&nbsp;</span>
-                    <span className="tabular-nums text-foreground">
-                      {formatMoney(s.availableCash)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+        {tab === "closed" && (
+          <div className="rounded-lg border border-border bg-panel p-3">
+            <h3 className="mb-2 text-xs font-semibold text-foreground">
+              Закрытые сделки всех участников
+            </h3>
+            <PositionsTable positions={allClosed} showOwner closed />
+          </div>
+        )}
 
-          {tab === "closed" && (
-            <div className="rounded-lg border border-border bg-panel p-3">
-              <h3 className="mb-2 text-xs font-semibold text-foreground">
-                Закрытые сделки всех участников
-              </h3>
-              <PositionsTable positions={allClosed} showOwner closed />
-            </div>
-          )}
+        {tab === "about" && (
+          <div className="rounded-lg border border-border bg-panel p-4 text-xs leading-relaxed text-muted">
+            <p className="mb-2 text-foreground">{note}</p>
+            <p className="whitespace-pre-line">{rulesText}</p>
+          </div>
+        )}
+      </section>
 
-          {tab === "watchlist" && (
-            <div className="rounded-lg border border-border bg-panel p-3">
-              <h3 className="mb-2 text-xs font-semibold text-foreground">
-                Список наблюдения — инструменты, которые присматривают участники
-              </h3>
-              <WatchlistTable items={watchlist} />
-            </div>
-          )}
-
-          {tab === "about" && (
-            <div className="rounded-lg border border-border bg-panel p-4 text-xs leading-relaxed text-muted">
-              <p className="mb-2 text-foreground">{note}</p>
-              <p className="whitespace-pre-line">{rulesText}</p>
-            </div>
-          )}
-        </div>
-      </div>
+      {modalStat && (
+        <ParticipantModal stat={modalStat} onClose={() => setModalName(null)} />
+      )}
     </>
   );
 }

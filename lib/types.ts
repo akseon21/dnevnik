@@ -32,6 +32,8 @@ export type Participant = {
   availableCash: number; // свободные средства, $
 };
 
+// Список наблюдения — оставлен в типах для совместимости (таблица watchlist в БД
+// сохранена), но в UI больше не используется (убран таб «Список наблюдения», v4).
 export type WatchlistItem = {
   instrument: string; // тикер, который присматривают (XAGUSD, AUDUSD, ...) — НЕ переводим
   note: string; // комментарий «ждём отбой от уровня» и т.п.
@@ -45,5 +47,5 @@ export type Competition = {
   note: string; // пометка «данные обновляются раз в день…»
   tickers: Ticker[];
   participants: Participant[];
-  watchlist: WatchlistItem[]; // список наблюдения (v3)
+  watchlist?: WatchlistItem[]; // не используется в UI (v4), оставлено для совместимости
 };

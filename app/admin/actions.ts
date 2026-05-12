@@ -89,19 +89,13 @@ export type AdminData = {
     lot: number;
     unrealized_pnl: number;
   }[];
-  watchlist: {
-    id: string;
-    instrument: string;
-    note: string;
-    participant_names: string[];
-  }[];
 };
 
 export async function getAdminData(): Promise<AdminData | null> {
   if (!(await isAuthed())) return null;
   if (!hasServiceRole()) return null;
   const db = getServiceClient();
-  const [metaRes, pRes, tRes, posRes, wRes] = await Promise.all([
+  const [metaRes, pRes, tRes, posRes] = await Promise.all([
     db
       .from("competition_meta")
       .select("id, title, start_date, end_date, note")
@@ -118,17 +112,12 @@ export async function getAdminData(): Promise<AdminData | null> {
       .select("id, participant_id, side, instrument, lot, unrealized_pnl")
       .eq("status", "open")
       .order("opened_at", { ascending: false }),
-    db
-      .from("watchlist")
-      .select("id, instrument, note, participant_names")
-      .order("created_at", { ascending: true }),
   ]);
   return {
     meta: (metaRes.data as AdminData["meta"]) ?? null,
     participants: (pRes.data as AdminData["participants"]) ?? [],
     tickers: (tRes.data as AdminData["tickers"]) ?? [],
     openPositions: (posRes.data as AdminData["openPositions"]) ?? [],
-    watchlist: wRes.error ? [] : ((wRes.data as AdminData["watchlist"]) ?? []),
   };
 }
 
@@ -271,33 +260,5 @@ export async function upsertMeta(
 }
 
 // ── watchlist ────────────────────────────────────────────────────────────────
-export async function addWatchlistItem(
-  _prev: ActionResult | null,
-  formData: FormData,
-): Promise<ActionResult> {
-  return guarded(async (db) => {
-    const instrument = strField(formData, "instrument").toUpperCase();
-    const note = strField(formData, "note");
-    const participant_names = strField(formData, "participant_names")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (!instrument) return { ok: false, error: "Инструмент обязателен" };
-    const { error } = await db
-      .from("watchlist")
-      .insert({ instrument, note, participant_names });
-    return error ? { ok: false, error: error.message } : ok(`${instrument} добавлен в список наблюдения`);
-  });
-}
-
-export async function deleteWatchlistItem(
-  _prev: ActionResult | null,
-  formData: FormData,
-): Promise<ActionResult> {
-  return guarded(async (db) => {
-    const id = strField(formData, "id");
-    if (!id) return { ok: false, error: "Нет id записи" };
-    const { error } = await db.from("watchlist").delete().eq("id", id);
-    return error ? { ok: false, error: error.message } : ok("Запись удалена из списка наблюдения");
-  });
-}
+// Управление вотчлистом убрано из UI в v4. Таблица `watchlist` в Supabase
+// сохранена (миграция 0002), но дашборд и админка её больше не используют.

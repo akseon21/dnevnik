@@ -67,6 +67,9 @@ export default async function Home() {
         </div>
       </header>
 
+      {/* ─── Лидерборд с медальками ─── */}
+      <Leaderboard top={top} />
+
       {/* ─── Верхняя строка тикеров (авто-обновление через /api/tickers) ─── */}
       <TickerStrip
         initial={competition.tickers}
@@ -74,21 +77,17 @@ export default async function Home() {
         outsider={outsiderInfo}
       />
 
-      {/* ─── Лидерборд с медальками ─── */}
-      <Leaderboard top={top} />
-
-      {/* ─── Интерактивная часть: фильтр + график + карточки + табы ─── */}
+      {/* ─── Интерактивная часть: фильтр + график + участники + табы ─── */}
       <DashboardShell
         stats={stats}
         rows={rows}
         lines={lines}
         note={competition.note}
         rulesText={RULES_TEXT}
-        watchlist={competition.watchlist}
       />
 
       <footer className="pt-2 text-center text-[10px] text-muted">
-        📊 {competition.note} · {periodLabel}
+        {competition.title} · {new Date().getFullYear()}
       </footer>
     </main>
   );

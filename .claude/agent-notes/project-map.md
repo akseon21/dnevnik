@@ -1,4 +1,7 @@
-# Карта проекта (v3)
+# Карта проекта (v4)
+
+> v4-дельта: убран таб «Список наблюдения» (везде — UI/db/admin; таблица watchlist в БД оставлена, не используется). Карточки участников справа → компактный ряд + модалка `ParticipantModal.tsx`. График на всю ширину (1-кол. layout). В `EquityChart` добавлены: клик-выделение линии через легенду, таймфреймы (Весь период/Неделя/3 дня/Сегодня), маркеры закрытых сделок (ReferenceDot+SVG title-тултип, цвет по PnL). Адаптив под мобилу. Футер очищен (только title+год).
+
 
 ```
 dnevnik/
@@ -20,10 +23,11 @@ dnevnik/
 │   ├── api/
 │   │   └── tickers/route.ts   ← GET, revalidate=300. Тянет CoinGecko (BTCUSD) + Frankfurter (EUR/GBP/JPY) + goldprice.org (XAU/XAG, нужны браузероподобные заголовки) параллельно с 4-сек таймаутом, мёрджит с БД-значениями (БД=fallback), отдаёт {tickers:[{symbol,price,change24h,live}],updatedAt}. Graceful: всё легло → ровно БД.
 │   ├── components/
-│   │   ├── EquityChart.tsx    ← client: recharts LineChart — multi-line equity, пунктир __avg, ReferenceDot с инициалами, кастомный Tooltip
+│   │   ├── EquityChart.tsx    ← client: recharts LineChart — multi-line equity, пунктир __avg, ReferenceDot с инициалами на концах, кастомный Tooltip. v4: useState highlight (клик в легенде → выделить линию), useState tf (таймфреймы — фильтр rows), маркеры закрытых сделок (ReferenceDot shape=<TradeDot> SVG circle+<title>, цвет var(--pos)/var(--neg) по PnL). Пропсы: rows, lines, stats.
+│   │   ├── ParticipantModal.tsx ← client (v4): модалка участника. div-оверлей fixed inset-0 z-50, фокус-трап (tabIndex=-1 + ref.focus), body.overflow=hidden, закрытие крестик/клик-фон/Esc. Шапка + открытые позиции + закрытые сделки + свободные средства. Мобила — снизу полноэкранная, ≥sm — по центру.
 │   │   ├── TickerStrip.tsx    ← client: верхняя строка тикеров. SSR-старт с БД-значений, опрос /api/tickers каждые 60с, обновление цен, индикатор ●live/○бд, бейдж «бд» у не-live тикеров. Лидер/аутсайдер через пропсы.
 │   │   ├── Leaderboard.tsx    ← server: топ-3 по росту % (медальки 🥇🥈🥉 + аватар-инициалы + рост% + текущий баланс). <3 участников → «участников: N».
-│   │   └── DashboardShell.tsx ← client: фильтр участников (дропдаун-чекбоксы) + активный таб. 2-кол. сетка (слева — EquityChart + сводные карточки; справа — табы + правые карточки участников с позициями / закрытые сделки / список наблюдения=таблица WatchlistTable / о соревновании). Принимает проп watchlist.
+│   │   └── DashboardShell.tsx ← client: фильтр участников (дропдаун-чекбоксы) + активный таб + modalName. v4: 1-кол. layout — тулбар (note+фильтр) → EquityChart на всю ширину → компактный ряд участников (grid 2/3/5, клик → ParticipantModal) → табы (Открытые позиции / Закрытые сделки / О соревновании — БЕЗ вотчлиста, overflow-x-auto). Пропсы: stats, rows, lines, note, rulesText (watchlist убран).
 │   └── admin/
 │       ├── actions.ts         ← "use server": login/logout, getAdminData() (с id, вкл. watchlist), мутации addBalancePoint/addPosition/closePosition/upsertParticipant/upsertTicker/upsertMeta/addWatchlistItem/deleteWatchlistItem (guarded: auth+hasServiceRole, revalidatePath("/"))
 │       ├── page.tsx           ← server: нет ADMIN_PASSWORD → "не настроена"; не залогинен → форма; нет ключей Supabase → "БД не подключена"; иначе → <AdminPanel>

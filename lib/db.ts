@@ -1,12 +1,6 @@
 import { competition as staticCompetition } from "@/data/competition";
 import { getAnonClient, hasSupabase } from "@/lib/supabase";
-import type {
-  Competition,
-  Participant,
-  Position,
-  Ticker,
-  WatchlistItem,
-} from "@/lib/types";
+import type { Competition, Participant, Position, Ticker } from "@/lib/types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Слой данных дашборда.
@@ -60,12 +54,6 @@ type TickerRow = {
   change_24h: number | string | null;
 };
 
-type WatchlistRow = {
-  instrument: string;
-  note: string | null;
-  participant_names: string[] | null;
-};
-
 const num = (v: number | string | null | undefined): number =>
   v == null ? 0 : typeof v === "number" ? v : Number(v) || 0;
 
@@ -76,44 +64,34 @@ export async function getCompetitionData(): Promise<Competition> {
   if (!supabase) return staticCompetition;
 
   try {
-    const [
-      metaRes,
-      participantsRes,
-      balanceRes,
-      positionsRes,
-      tickersRes,
-      watchlistRes,
-    ] = await Promise.all([
-      supabase
-        .from("competition_meta")
-        .select("title, start_date, end_date, note")
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      supabase
-        .from("participants")
-        .select("id, name, color, avatar_url, available_cash, sort_order")
-        .order("sort_order", { ascending: true })
-        .order("name", { ascending: true }),
-      supabase
-        .from("balance_points")
-        .select("participant_id, ts, value")
-        .order("ts", { ascending: true }),
-      supabase
-        .from("positions")
-        .select(
-          "participant_id, side, instrument, lot, exit_plan, unrealized_pnl, status, opened_at, closed_at",
-        )
-        .order("opened_at", { ascending: false }),
-      supabase
-        .from("tickers")
-        .select("symbol, price, change_24h")
-        .order("symbol", { ascending: true }),
-      supabase
-        .from("watchlist")
-        .select("instrument, note, participant_names")
-        .order("created_at", { ascending: true }),
-    ]);
+    const [metaRes, participantsRes, balanceRes, positionsRes, tickersRes] =
+      await Promise.all([
+        supabase
+          .from("competition_meta")
+          .select("title, start_date, end_date, note")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from("participants")
+          .select("id, name, color, avatar_url, available_cash, sort_order")
+          .order("sort_order", { ascending: true })
+          .order("name", { ascending: true }),
+        supabase
+          .from("balance_points")
+          .select("participant_id, ts, value")
+          .order("ts", { ascending: true }),
+        supabase
+          .from("positions")
+          .select(
+            "participant_id, side, instrument, lot, exit_plan, unrealized_pnl, status, opened_at, closed_at",
+          )
+          .order("opened_at", { ascending: false }),
+        supabase
+          .from("tickers")
+          .select("symbol, price, change_24h")
+          .order("symbol", { ascending: true }),
+      ]);
 
     // Если базовые запросы упали — деградируем на статику.
     if (participantsRes.error || metaRes.error) {
@@ -135,9 +113,6 @@ export async function getCompetitionData(): Promise<Competition> {
     const balanceRows = (balanceRes.data ?? []) as BalancePointRow[];
     const positionRows = (positionsRes.data ?? []) as PositionRow[];
     const tickerRows = (tickersRes.data ?? []) as TickerRow[];
-    const watchlistRows = watchlistRes.error
-      ? []
-      : ((watchlistRes.data ?? []) as WatchlistRow[]);
 
     const participants: Participant[] = participantRows.map((p) => {
       const timeline = balanceRows
@@ -174,12 +149,6 @@ export async function getCompetitionData(): Promise<Competition> {
       change24h: num(t.change_24h),
     }));
 
-    const watchlist: WatchlistItem[] = watchlistRows.map((w) => ({
-      instrument: w.instrument,
-      note: w.note ?? "",
-      participantNames: w.participant_names ?? [],
-    }));
-
     return {
       title: meta.title,
       startDate: meta.start_date,
@@ -188,7 +157,6 @@ export async function getCompetitionData(): Promise<Competition> {
       tickers: tickers.length > 0 ? tickers : staticCompetition.tickers,
       participants:
         participants.length > 0 ? participants : staticCompetition.participants,
-      watchlist,
     };
   } catch (err) {
     console.error("[db] Supabase error, falling back to static:", err);
