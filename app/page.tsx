@@ -1,32 +1,41 @@
-import { competition } from "@/data/competition";
+import Link from "next/link";
+import { getCompetitionData } from "@/lib/db";
 import {
   getParticipantStats,
   getLeaderAndOutsider,
   getChartData,
-  formatMoney,
   formatPct,
-  initials,
   formatTs,
 } from "@/lib/standings";
-import EquityChart from "./components/EquityChart";
+import DashboardShell from "./components/DashboardShell";
 
 function ChangeText({ value }: { value: number }) {
   const cls = value > 0 ? "text-pos" : value < 0 ? "text-neg" : "text-muted";
   return <span className={cls}>{formatPct(value)}</span>;
 }
 
-function periodLabel(): string {
-  return `${formatTs(competition.startDate)} — ${formatTs(competition.endDate)}`;
-}
+const RULES_TEXT = `Реалити-торговля сообщества: участники торгуют форекс-инструменты (золото, серебро, валютные пары) и публично показывают динамику своего депозита.
 
-export default function Home() {
-  const stats = getParticipantStats();
-  const { leader, outsider } = getLeaderAndOutsider();
-  const { rows } = getChartData();
+• Каждый участник стартует со своим депозитом — на графике видна equity-кривая.
+• Балансы и позиции обновляются раз в день, в конце торгового дня.
+• Лидер и аутсайдер считаются по изменению депозита в % от старта.
+• «Размер лота» — объём позиции в лотах; «План выхода» — уровни TP/SL.
+• Закрытые сделки попадают во вкладку «Закрытые сделки».`;
+
+// Данные могут приходить из Supabase — не кешируем агрессивно.
+export const revalidate = 0;
+
+export default async function Home() {
+  const competition = await getCompetitionData();
+  const stats = getParticipantStats(competition);
+  const { leader, outsider } = getLeaderAndOutsider(stats);
+  const { rows } = getChartData(competition);
   const lines = competition.participants.map((p) => ({
     name: p.name,
     color: p.color,
   }));
+
+  const periodLabel = `${formatTs(competition.startDate)} — ${formatTs(competition.endDate)}`;
 
   return (
     <main className="mx-auto flex min-h-full max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6">
@@ -37,12 +46,19 @@ export default function Home() {
             {competition.title}
           </h1>
           <p className="mt-0.5 text-xs text-muted">
-            Период: {periodLabel()} · Участников:{" "}
-            {competition.participants.length}
+            Период: {periodLabel} · Участников: {competition.participants.length}
           </p>
         </div>
-        <div className="text-[10px] uppercase tracking-widest text-muted">
-          Реалити-торговля · live-дашборд
+        <div className="flex items-center gap-3">
+          <Link
+            href="/admin"
+            className="text-[10px] uppercase tracking-widest text-muted hover:text-accent"
+          >
+            Админка
+          </Link>
+          <div className="text-[10px] uppercase tracking-widest text-muted">
+            Реалити-торговля · live-дашборд
+          </div>
         </div>
       </header>
 
@@ -87,49 +103,17 @@ export default function Home() {
         </span>
       </section>
 
-      {/* ─── Главный график ─── */}
-      <section className="rounded-lg border border-border bg-panel p-4">
-        <div className="mb-2 flex items-baseline justify-between">
-          <h2 className="text-sm font-bold tracking-tight text-foreground">
-            Общий баланс счёта
-          </h2>
-          <span className="text-[10px] uppercase tracking-widest text-muted">
-            пунктир — среднее по участникам
-          </span>
-        </div>
-        <EquityChart rows={rows} lines={lines} />
-      </section>
-
-      {/* ─── Нижняя строка: сводные карточки участников ─── */}
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        {stats.map((s) => (
-          <div
-            key={s.name}
-            className="flex flex-col gap-2 rounded-lg border border-border bg-panel p-3"
-          >
-            <div className="flex items-center gap-2">
-              <span
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
-                style={{ borderColor: s.color, color: s.color }}
-              >
-                {initials(s.name)}
-              </span>
-              <span className="truncate text-sm font-semibold text-foreground">
-                {s.name}
-              </span>
-            </div>
-            <div className="flex items-baseline justify-between">
-              <span className="tabular-nums text-base font-bold text-foreground">
-                {formatMoney(s.currentValue)}
-              </span>
-              <ChangeText value={s.changePct} />
-            </div>
-          </div>
-        ))}
-      </section>
+      {/* ─── Интерактивная часть: фильтр + график + карточки + табы ─── */}
+      <DashboardShell
+        stats={stats}
+        rows={rows}
+        lines={lines}
+        note={competition.note}
+        rulesText={RULES_TEXT}
+      />
 
       <footer className="pt-2 text-center text-[10px] text-muted">
-        Данные обновляются вручную · {periodLabel()}
+        📊 {competition.note} · {periodLabel}
       </footer>
     </main>
   );
