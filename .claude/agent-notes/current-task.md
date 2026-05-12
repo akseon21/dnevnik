@@ -1,5 +1,27 @@
 # Текущий статус
 
+## v5.2 — кликабельные линии/аватары на графике → модалка участника (2026-05-12)
+- `app/components/EquityChart.tsx`: новый опциональный проп `onParticipantClick?: (participantName: string) => void`.
+  - У каждой `<Line>` участника: `onClick={() => onParticipantClick(l.name)}` + `style={{ cursor: 'pointer' }}` (только когда проп передан). recharts 3.x `<Line>` поддерживает `onClick` (через `CurveMouseEvents`) и `style` (через `PresentationAttributesWithProps`). Кликабельна сама линия (path stroke), узкая зона ~ширине линии — приемлемо.
+  - У end-of-line `ReferenceDot` (кружок-аватар с инициалами): `onClick={() => onParticipantClick(ep.name)}` + `style={{ cursor: 'pointer' }}`. recharts `ReferenceDot` поддерживает `onClick` нативно и `style` через DotProps.
+  - `__avg` (пунктир-среднее) и `tradeMarkers` (маркеры закрытых сделок, `TradeDot`) — НЕ кликабельны, оставлены как были.
+  - Легенда снизу (клик по имени → highlight/dim линий) — не тронута, конфликта нет (легенда — отдельный блок под графиком, линии/аватары — в области графика).
+  - Работает в обоих режимах графика (balance/equity) и на всех таймфреймах — линии/аватары всегда рендерятся из `lines`/`endPoints`.
+- `app/components/DashboardShell.tsx`: `<EquityChart ... onParticipantClick={(name) => setModalName(name)} />` — тот же `modalName` стейт, что открывает `ParticipantModal` при клике на компактную карточку участника. `name` приходит из `shownLines`/`endPoints`, всегда резолвится в `stats.find(s => s.name === modalName)`.
+- Зависимостей не добавлял. Данные / Supabase / тикеры / лидерборд / карточки / контент модалки — не тронуты.
+- Валидация: `npm run lint` чисто, `npm run build` чисто (TS OK, маршруты без изменений: `/` ƒ, `/admin` ƒ, `/api/tickers` ○ 5m), `npm run dev` (порт 4789) `/` → 200. Пуш в `origin/main` → Vercel автодеплой.
+
+## v5.1 — переключатель режима графика (2026-05-12, коммит 888fb98)
+- `app/components/EquityChart.tsx`: добавлен `useState<ChartMode>('balance')` (`'balance' | 'equity'`).
+  - Режим `balance` — как было: линии = `displayRows` = `shownRows` (timeline.value участников).
+  - Режим `equity` — `useMemo equityRows`: клон `shownRows`, у каждого участника с открытыми позициями (`status==='open'`, `unrealizedPnl !== 0`) ПОСЛЕДНЯЯ числовая точка приподнята на сумму его `unrealizedPnl` (берётся из `stats[].openPositions`/`unrealizedPnl`); `__avg` пересчитан по фактическим значениям участников в каждой строке. Исторические точки не трогаются (нет исторического floating PnL — стандартный Balance vs Equity). Если ни у кого нет открытых позиций → `equityRows === shownRows`.
+  - `displayRows = mode === 'equity' ? equityRows : shownRows` — на нём строятся `<LineChart data>`, `endPoints` (аватары на концах), `tradeMarkers`, `intraDay`. Всё (легенда-выделение, таймфреймы, маркеры закрытых сделок, аватары, draw-анимация) работает в обоих режимах.
+  - Draw-флаг: `drawKey = `${tf}:${mode}``, `drawnFor` теперь string, эффект перезапускается и при смене tf, и при смене mode → маркеры/аватары снова появляются с задержкой 1100мс.
+  - UI: рядом с кнопками таймфреймов — сегментед-контрол в рамке `border border-border p-0.5`, две кнопки «По депозиту» / «По депозиту + нереализ. PnL», активная подсвечена `bg-accent/15 text-accent`. Если открытых позиций нет — у кнопки equity `title`-подсказка «линии совпадают».
+  - Тултип: `CustomTooltip` получил проп `mode`; в режиме equity внизу строка «equity (с открытыми сделками)». Под легендой в режиме equity — `<p>` с пояснением (последняя точка включает нереализ. PnL / открытых позиций нет).
+  - Зависимостей не добавлял. `lib/standings.ts`, данные, Supabase, тикеры, лидерборд, модалка, карточки — не тронуты.
+- Валидация: `npm run lint` чисто, `npm run build` чисто (TS OK, маршруты без изменений), `npm run dev` (порт 4321) `/` → 200, в SSR-HTML обе кнопки «По депозиту» / «По депозиту + нереализ. PnL». В `data/competition.ts` есть открытые позиции у нескольких участников → в режиме equity их линии заметно приподняты. Пуш в `origin/main` → Vercel автодеплой.
+
 ## v5 — ГОТОВ (2026-05-12) — 6 улучшений
 
 Все 6 пунктов сделаны полностью.

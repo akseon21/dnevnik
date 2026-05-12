@@ -28,6 +28,7 @@ type Props = {
   rows: ChartRow[];
   lines: LineMeta[];
   stats: ParticipantStat[];
+  onParticipantClick?: (participantName: string) => void;
 };
 
 // ── таймфреймы ───────────────────────────────────────────────────────────────
@@ -130,7 +131,7 @@ function tradeTitle(owner: string, pos: Position): string {
 
 const LINE_ANIM_MS = 1100;
 
-export default function EquityChart({ rows, lines, stats }: Props) {
+export default function EquityChart({ rows, lines, stats, onParticipantClick }: Props) {
   const [highlight, setHighlight] = useState<string | null>(null);
   const [tf, setTf] = useState<TimeframeKey>("all");
   const [mode, setMode] = useState<ChartMode>("balance");
@@ -369,6 +370,10 @@ export default function EquityChart({ rows, lines, stats }: Props) {
                 isAnimationActive
                 animationDuration={LINE_ANIM_MS}
                 animationEasing="ease-out"
+                style={onParticipantClick ? { cursor: "pointer" } : undefined}
+                onClick={
+                  onParticipantClick ? () => onParticipantClick(l.name) : undefined
+                }
               />
             ))}
             {drawn && tradeMarkers.map((m) => {
@@ -401,6 +406,10 @@ export default function EquityChart({ rows, lines, stats }: Props) {
                     stroke={ep.color}
                     strokeWidth={2}
                     strokeOpacity={dim(ep.name) ? 0.25 : 1}
+                    style={onParticipantClick ? { cursor: "pointer" } : undefined}
+                    onClick={
+                      onParticipantClick ? () => onParticipantClick(ep.name) : undefined
+                    }
                     label={{
                       value: initials(ep.name),
                       fill: ep.color,

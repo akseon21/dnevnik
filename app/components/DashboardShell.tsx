@@ -231,7 +231,12 @@ export default function DashboardShell({
             Выберите участников в фильтре
           </p>
         ) : (
-          <EquityChart rows={rows} lines={shownLines} stats={shownStats} />
+          <EquityChart
+            rows={rows}
+            lines={shownLines}
+            stats={shownStats}
+            onParticipantClick={(name) => setModalName(name)}
+          />
         )}
       </section>
 
