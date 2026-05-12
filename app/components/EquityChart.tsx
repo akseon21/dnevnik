@@ -39,6 +39,12 @@ const TIMEFRAMES: { key: TimeframeKey; label: string; days: number }[] = [
   { key: "1d", label: "Сегодня", days: 1 },
 ];
 
+// ── режим графика ────────────────────────────────────────────────────────────
+// "balance" — линии = баланс счёта (закрытый результат), как в данных.
+// "equity"  — у участника с открытыми позициями последняя точка приподнята на
+//             сумму его нереализованного PnL (Balance vs Equity, текущий снимок).
+type ChartMode = "balance" | "equity";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function tsMs(ts: string): number {
@@ -52,7 +58,8 @@ function CustomTooltip({
   active,
   payload,
   label,
-}: Partial<TooltipContentProps<number, string>>) {
+  mode = "balance",
+}: Partial<TooltipContentProps<number, string>> & { mode?: ChartMode }) {
   if (!active || !payload || payload.length === 0) return null;
   return (
     <div className="rounded-md border border-border bg-panel/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
@@ -81,6 +88,11 @@ function CustomTooltip({
               Number(payload.find((p) => p.dataKey === "__avg")?.value ?? 0)
             )}
           </span>
+        </div>
+      )}
+      {mode === "equity" && (
+        <div className="mt-1 border-t border-border pt-1 text-[10px] text-muted">
+          equity (с открытыми сделками)
         </div>
       )}
     </div>
@@ -121,15 +133,17 @@ const LINE_ANIM_MS = 1100;
 export default function EquityChart({ rows, lines, stats }: Props) {
   const [highlight, setHighlight] = useState<string | null>(null);
   const [tf, setTf] = useState<TimeframeKey>("all");
+  const [mode, setMode] = useState<ChartMode>("balance");
 
   // линии «прорисовываются» слева направо; маркеры/аватары появляются после этого.
-  // храним tf, для которого анимация уже завершилась — без синхронного setState в эффекте.
-  const [drawnFor, setDrawnFor] = useState<TimeframeKey | null>(null);
+  // храним пару (tf, mode), для которой анимация уже завершилась — без синхронного setState в эффекте.
+  const drawKey = `${tf}:${mode}`;
+  const [drawnFor, setDrawnFor] = useState<string | null>(null);
   useEffect(() => {
-    const id = setTimeout(() => setDrawnFor(tf), LINE_ANIM_MS);
+    const id = setTimeout(() => setDrawnFor(drawKey), LINE_ANIM_MS);
     return () => clearTimeout(id);
-  }, [tf]);
-  const drawn = drawnFor === tf;
+  }, [drawKey]);
+  const drawn = drawnFor === drawKey;
 
   // диапазон данных, чтобы дизейблить лишние таймфреймы
   const spanDays = useMemo(() => {
@@ -153,18 +167,61 @@ export default function EquityChart({ rows, lines, stats }: Props) {
     return m;
   }, [lines]);
 
+  // нереализованный PnL по открытым позициям — по имени участника
+  const unrealizedByName = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of stats) {
+      const has = s.openPositions.some((p) => p.status === "open");
+      if (has && s.unrealizedPnl !== 0) m.set(s.name, s.unrealizedPnl);
+    }
+    return m;
+  }, [stats]);
+
+  // режим "equity": клонируем строки и приподнимаем ПОСЛЕДНЮЮ числовую точку
+  // каждого участника на сумму его нереализованного PnL. __avg пересчитываем
+  // по equity-значениям. Исторические точки не трогаем (нет исторического floating PnL).
+  const equityRows = useMemo<ChartRow[]>(() => {
+    if (unrealizedByName.size === 0) return shownRows;
+    const cloned: ChartRow[] = shownRows.map((r) => ({ ...r }));
+    // последний числовой индекс на участника
+    for (const [name, pnl] of unrealizedByName) {
+      for (let i = cloned.length - 1; i >= 0; i--) {
+        if (typeof cloned[i][name] === "number") {
+          cloned[i][name] = (cloned[i][name] as number) + pnl;
+          break;
+        }
+      }
+    }
+    // пересчёт среднего по фактическим значениям участников в строке
+    for (const r of cloned) {
+      let sum = 0;
+      let count = 0;
+      for (const l of lines) {
+        const v = r[l.name];
+        if (typeof v === "number") {
+          sum += v;
+          count += 1;
+        }
+      }
+      if (count > 0) r["__avg"] = Math.round(sum / count);
+    }
+    return cloned;
+  }, [shownRows, unrealizedByName, lines]);
+
+  const displayRows = mode === "equity" ? equityRows : shownRows;
+
   // последний индекс, где у участника есть значение — для подписи на конце линии
   const endPoints = lines.map((l) => {
-    for (let i = shownRows.length - 1; i >= 0; i--) {
-      const v = shownRows[i][l.name];
-      if (typeof v === "number") return { ...l, ts: shownRows[i].ts, value: v };
+    for (let i = displayRows.length - 1; i >= 0; i--) {
+      const v = displayRows[i][l.name];
+      if (typeof v === "number") return { ...l, ts: displayRows[i].ts, value: v };
     }
     return null;
   });
 
   // маркеры закрытых сделок: для каждой закрытой позиции — ближайшая точка timeline
   const tradeMarkers = useMemo(() => {
-    if (shownRows.length === 0) return [];
+    if (displayRows.length === 0) return [];
     const out: { key: string; owner: string; ts: string; value: number; pos: Position }[] = [];
     for (const s of stats) {
       if (!colorByName.has(s.name)) continue; // участник скрыт фильтром
@@ -174,7 +231,7 @@ export default function EquityChart({ rows, lines, stats }: Props) {
         const targetMs = tsMs(pos.closedAt);
         // ближайшая строка, где у участника есть значение
         let best: { row: ChartRow; diff: number } | null = null;
-        for (const r of shownRows) {
+        for (const r of displayRows) {
           if (typeof r[s.name] !== "number") continue;
           const diff = Math.abs(tsMs(r.ts) - targetMs);
           if (!best || diff < best.diff) best = { row: r, diff };
@@ -190,14 +247,14 @@ export default function EquityChart({ rows, lines, stats }: Props) {
       }
     }
     return out;
-  }, [stats, shownRows, colorByName]);
+  }, [stats, displayRows, colorByName]);
 
   // формат оси X: если видимые данные охватывают > 1 дня — только дата «DD.MM»,
   // иначе (несколько точек внутри одного дня, напр. фильтр «Сегодня») — время «HH:MM»
   const intraDay = useMemo(() => {
-    if (shownRows.length < 2) return false;
-    return tsMs(shownRows[shownRows.length - 1].ts) - tsMs(shownRows[0].ts) <= DAY_MS;
-  }, [shownRows]);
+    if (displayRows.length < 2) return false;
+    return tsMs(displayRows[displayRows.length - 1].ts) - tsMs(displayRows[0].ts) <= DAY_MS;
+  }, [displayRows]);
 
   function xTickFormatter(ts: string): string {
     const m = String(ts).match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/);
@@ -209,35 +266,64 @@ export default function EquityChart({ rows, lines, stats }: Props) {
 
   const dim = (name: string) => highlight !== null && highlight !== name;
 
+  const hasUnrealized = unrealizedByName.size > 0;
+
   return (
     <div>
-      {/* таймфреймы */}
-      <div className="mb-2 flex flex-wrap gap-1">
-        {TIMEFRAMES.map((t) => {
-          // прячем кнопки, для которых данных заведомо меньше выбранного периода
-          const disabled =
-            Number.isFinite(t.days) && spanDays > 0 && spanDays < t.days * 0.5 && t.key !== "all";
-          if (disabled) return null;
-          return (
+      {/* панель управления: таймфреймы + режим графика */}
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="flex flex-wrap gap-1">
+          {TIMEFRAMES.map((t) => {
+            // прячем кнопки, для которых данных заведомо меньше выбранного периода
+            const disabled =
+              Number.isFinite(t.days) && spanDays > 0 && spanDays < t.days * 0.5 && t.key !== "all";
+            if (disabled) return null;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setTf(t.key)}
+                className={`rounded px-2.5 py-1 text-[11px] font-medium transition ${
+                  tf === t.key
+                    ? "bg-accent/15 text-accent"
+                    : "border border-border text-muted hover:text-foreground"
+                }`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+        {/* режим: баланс vs баланс + нереализованный PnL */}
+        <div className="flex items-center rounded border border-border p-0.5">
+          {([
+            { key: "balance", label: "По депозиту" },
+            { key: "equity", label: "По депозиту + нереализ. PnL" },
+          ] as const).map((m) => (
             <button
-              key={t.key}
+              key={m.key}
               type="button"
-              onClick={() => setTf(t.key)}
+              onClick={() => setMode(m.key)}
+              title={
+                m.key === "equity" && !hasUnrealized
+                  ? "Нет открытых позиций — линии совпадают с режимом «По депозиту»"
+                  : undefined
+              }
               className={`rounded px-2.5 py-1 text-[11px] font-medium transition ${
-                tf === t.key
+                mode === m.key
                   ? "bg-accent/15 text-accent"
-                  : "border border-border text-muted hover:text-foreground"
+                  : "text-muted hover:text-foreground"
               }`}
             >
-              {t.label}
+              {m.label}
             </button>
-          );
-        })}
+          ))}
+        </div>
       </div>
 
       <div className="h-[340px] w-full sm:h-[420px]">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={shownRows} margin={{ top: 16, right: 110, bottom: 8, left: 8 }}>
+          <LineChart data={displayRows} margin={{ top: 16, right: 110, bottom: 8, left: 8 }}>
             <CartesianGrid stroke="#1f1f24" strokeDasharray="3 3" />
             <XAxis
               dataKey="ts"
@@ -254,7 +340,7 @@ export default function EquityChart({ rows, lines, stats }: Props) {
               width={64}
               domain={["auto", "auto"]}
             />
-            <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#3f3f46" }} />
+            <Tooltip content={<CustomTooltip mode={mode} />} cursor={{ stroke: "#3f3f46" }} />
             <Line
               type="monotone"
               dataKey="__avg"
@@ -372,6 +458,13 @@ export default function EquityChart({ rows, lines, stats }: Props) {
           </span>
         )}
       </div>
+      {mode === "equity" && (
+        <p className="mt-1 text-[10px] text-muted">
+          {hasUnrealized
+            ? "Последняя точка линий включает нереализованный PnL открытых позиций (equity). Исторические точки — только закрытый результат."
+            : "Открытых позиций нет — линии совпадают с режимом «По депозиту»."}
+        </p>
+      )}
     </div>
   );
 }
