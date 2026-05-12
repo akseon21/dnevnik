@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { getCompetitionData } from "@/lib/db";
 import {
   getParticipantStats,
@@ -52,12 +51,6 @@ export default async function Home() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Link
-            href="/admin"
-            className="text-[10px] uppercase tracking-widest text-muted hover:text-accent"
-          >
-            Админка
-          </Link>
           <div className="text-[10px] uppercase tracking-widest text-muted">
             Реалити-торговля · live-дашборд
           </div>
