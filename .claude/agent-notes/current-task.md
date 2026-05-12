@@ -1,5 +1,45 @@
 # Текущий статус
 
+## v7 — АДМИНКА: полное редактирование участников и сделок + UX (2026-05-12)
+
+**Только `/admin` + data-слой (actions). Дашборд (`/`) и `/api/tickers` НЕ тронуты. Миграция НЕ нужна** — всё нужное уже в схеме: `participants.avatar_url` (0001), `participants.starting_deposit` (0003), `positions.margin`/`positions.realized_pnl` (0003), `positions.participant_id ... ON DELETE CASCADE` + `balance_points.participant_id ... ON DELETE CASCADE` (0001 — каскад уже есть, `deleteParticipant` ещё и явно удаляет сделки/точки перед участником на случай если каскад на конкретной БД не настроен).
+
+### app/admin/actions.ts
+- `upsertParticipant` — теперь принимает `avatar_url` (пусто → null) вместе с name/color/starting_deposit/sort_order. Edit (есть `id`) → UPDATE, иначе INSERT.
+- **`deleteParticipant`** — DELETE positions.eq(participant_id) → DELETE balance_points.eq(participant_id) → DELETE participants.eq(id). guarded.
+- **`updateTrade`** — редактирует ЛЮБУЮ сделку (открытую или закрытую): side/instrument/lot/margin/exit_plan/opened_at; для закрытой ещё realized_pnl (обязателен) + closed_at; для открытой ещё unrealized_pnl. Hidden-поле `status` фиксировано на текущий статус (не переключает open↔closed). guarded.
+- **`deleteTrade`** — DELETE positions.eq(id). guarded.
+- `openTrade` / `updateTradePnl` / `closeTrade` / `upsertTicker` / `upsertMeta` — без изменений.
+- `getAdminData` — переписан: возвращает `participants: AdminParticipantRow[]` (id, name, color, **avatar_url**, starting_deposit, sort_order + ВЫЧИСЛЕННЫЕ inline: balance, equity, available_cash, change_pct, open_count, closed_count), `positions: AdminPositionRow[]` (ВСЕ сделки — открытые + закрытые, с id+participant_id), `tickers`, `meta`, `lastUpdated` (макс. updated_at среди meta/tickers, ISO). Старое `openPositions` поле убрано. Вычисления повторяют логику lib/standings.ts:getParticipantStats (balance = starting_deposit + Σ realized; equity = balance + Σ unrealized открытых; available_cash = balance − Σ margin открытых).
+- Хелперы: `toIsoOrNull` (datetime-local→ISO, трактует как UTC; пусто→null), `toIso` (пусто→now), `numFieldOrNull`.
+
+### app/admin/AdminPanel.tsx — переписан
+- Структура: 4 секции в нативных `<details>` (свернуть/развернуть). `👤 Участники` (open) → `📈 Сделки` (open) → `📊 Тикеры` (closed) → `🏁 Соревнование` (closed). Над секциями — шапка состояния: «Соревнование: {title} · {start}—{end} · N участников · последнее обновление {время} (UTC)».
+- **Участники**: список карточек (каждая с цветной левой полоской) — имя · старт · порядок · и под ним вычисленные «баланс / equity / свободно / рост% / N откр./M закр.». Рядом кнопки «Редактировать» (→ форма ниже подставляет defaultValue через `key={editId}` ремоунт) и «Удалить» (`ConfirmSubmit` с `confirm("Удалить участника X? Его сделки тоже удалятся.")`). Ниже — форма add/edit: имя / цвет (`<input type=color>`) / **фото URL** (пусто = инициалы) / стартовый депозит / порядок. Заголовок формы «Новый участник» / «Редактирование: X» + кнопка «+ новый» для сброса.
+- **Сделки**: блок «Открыть сделку» (как был) + список `<details>` на каждого участника. Внутри участника: открытые (🟢) и закрытые (🔒) сделки, у каждой строка-сводка + кнопки «Редактировать» (раскрывает инлайн-форму EditForm) и «Удалить» (`ConfirmSubmit`). У открытых дополнительно остались быстрые формы «Обновить PnL» и «Закрыть». EditForm: side/instrument/lot/margin/exit_plan/opened_at + (закрытая) realized_pnl+closed_at / (открытая) unrealized_pnl. `datetime-local` поля префиллятся через `toLocalInput(iso)` (UTC).
+- **Инлайн-фидбек**: каждая форма — свой `useActionState`, под формой `<Status state>` → «✅ {message}» (text-pos) или «❌ Ошибка: {error}» (text-neg). Никаких alert().
+- **Confirm**: `ConfirmSubmit` — `<button onClick={e => { if(!confirm(msg)) e.preventDefault() }}>` внутри формы → отменяет submit если пользователь нажал «Отмена».
+- Хелперы форматирования (fmtMoney/fmtPct/fmtDate/toLocalInput) — локальные в файле (Math.round, UTC). Не тащил из lib/standings (там Competition-завязка).
+- Зависимостей не добавлял. `useState` для editId участника/сделок (какую форму раскрыть).
+
+### app/admin/page.tsx — без изменений (передаёт `getAdminData()` в `AdminPanel`; шапка состояния теперь внутри AdminPanel).
+
+### Валидация v7
+- `npm run lint` — чисто (0 проблем).
+- `npm run build` — чисто (TS OK). Маршруты: `/` ƒ, `/admin` ƒ, `/api/tickers` ○ 5m — без изменений.
+- `npm run dev` (порт 4912) — `/` → 200, `/admin` → 200 (локально ADMIN_PASSWORD пуст → «Админка не настроена», как и раньше; формы появятся когда заданы ADMIN_PASSWORD + ключи Supabase).
+- Запушено в `origin/main` → Vercel автодеплой.
+
+### v7 — открытые вопросы
+- **Миграция 0004 НЕ нужна** — каскад и все колонки уже есть. (0001/0002/0003/0003b ещё надо прогнать через Supabase SQL Editor если прод-БД сырая — без этого дашборд+админка работают на статике, но `/admin` формы требуют service-role ключ → пишут «БД не подключена».)
+- **Реальные участники + стартовые депозиты — ВСЁ ЕЩЁ ПЛЕЙСХОЛДЕРЫ** (5 имён: Кирилл/Алексей/Павел/Lauris/Руслан, депозиты 1000–1500 в `data/competition.ts` + `0003b_seed.sql`). Заменить через `/admin` (теперь полное редактирование) или в файле.
+- Bulk-закрытие нескольких сделок одним действием — не делал (опционально, в задаче «на твой выбор»).
+- Таб-навигация вместо `<details>` — выбрал `<details>` (нативно, проще, без зависимостей; в задаче «на твой выбор»).
+- Авто-расчёт маржи из лот×плечо — НЕ делал (вводится вручную, как было).
+- Светлая тема, реальный 24h FX, Finnhub-ключ — всё ещё отложено.
+
+---
+
 ## v6 — РЕФАКТОР под сделко-центричную модель (2026-05-12)
 
 **Идея:** баланс / equity / свободные средства / timeline графика больше НЕ вводятся руками — они **вычисляются из сделок**. Руками задаются только `starting_deposit` участника и сами сделки (открыть → обновить плавающий PnL → закрыть с результатом).
