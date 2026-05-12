@@ -181,6 +181,21 @@ export default function EquityChart({ rows, lines, stats }: Props) {
     return out;
   }, [stats, shownRows, colorByName]);
 
+  // формат оси X: если видимые данные охватывают > 1 дня — только дата «DD.MM»,
+  // иначе (несколько точек внутри одного дня, напр. фильтр «Сегодня») — время «HH:MM»
+  const intraDay = useMemo(() => {
+    if (shownRows.length < 2) return false;
+    return tsMs(shownRows[shownRows.length - 1].ts) - tsMs(shownRows[0].ts) <= DAY_MS;
+  }, [shownRows]);
+
+  function xTickFormatter(ts: string): string {
+    const m = String(ts).match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/);
+    if (!m) return String(ts);
+    const [, , mm, dd, hh, min] = m;
+    if (intraDay && hh) return `${hh}:${min}`;
+    return `${dd}.${mm}`;
+  }
+
   const dim = (name: string) => highlight !== null && highlight !== name;
 
   return (
@@ -211,11 +226,11 @@ export default function EquityChart({ rows, lines, stats }: Props) {
 
       <div className="h-[340px] w-full sm:h-[420px]">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={shownRows} margin={{ top: 16, right: 88, bottom: 8, left: 8 }}>
+          <LineChart data={shownRows} margin={{ top: 16, right: 110, bottom: 8, left: 8 }}>
             <CartesianGrid stroke="#1f1f24" strokeDasharray="3 3" />
             <XAxis
               dataKey="ts"
-              tickFormatter={formatTs}
+              tickFormatter={xTickFormatter}
               stroke="#3f3f46"
               tick={{ fill: "#6b7280", fontSize: 11 }}
               tickMargin={8}

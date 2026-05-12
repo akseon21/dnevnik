@@ -74,3 +74,20 @@
 - v3.5 — fallback для металлов: если goldprice.org нестабилен на проде Vercel → завести бесплатный Finnhub-ключ (или metals.dev / metalpriceapi free tier), env-переменная, источник в `app/api/tickers/route.ts`.
 - Реальный 24h change для валютных пар — Frankfurter его не даёт; можно считать самим (запросить `latest` + вчерашнюю дату) либо принять, что для FX показываем 0%.
 - Открытые вопросы из v2 всё ещё в силе: реальные имена участников + стартовые депозиты, реальное название/даты, точный список тикеров, фото-аватары.
+
+---
+
+## v4.1 — убран лидер/аутсайдер из строки тикеров (2026-05-12, коммит e343b88)
+- `app/components/TickerStrip.tsx`: убрал props `leader`/`outsider`, тип `LeaderInfo`, хелпер `fmtPct`, блоки «Лидер: …»/«Аутсайдер: …». Осталось: тикеры (цена + change%), бейдж «бд» у не-live, индикатор «● live / ○ бд».
+- `app/page.tsx`: убрал импорт и вызов `getLeaderAndOutsider`, `leaderInfo`/`outsiderInfo`, передаю в `<TickerStrip initial={...} />`. Дублирование с `<Leaderboard>` (медальки) устранено.
+- `lib/standings.ts` — `getLeaderAndOutsider` оставлен в файле (не используется, но не мешает); Leaderboard использует `getLeaderboard` — не тронут.
+- Валидация: `npm run build` чисто, `npm run lint` чисто, `npm run dev` (порт 3199) `/` → 200, в HTML строки тикеров нет «Лидер»/«Аутсайдер» (слово «Лидер» осталось только в заголовке Leaderboard «🏆 Лидерборд» и в тексте правил — это ок). Пуш в main → Vercel задеплоил (Ready, 30s).
+
+---
+
+## v4.2 — два фикса графика (2026-05-12)
+- `app/components/EquityChart.tsx`:
+  - Ось X — date-only. Новый `xTickFormatter`: эвристика `intraDay = useMemo` (span видимых точек ≤ 1 дня) → если внутри одного дня и есть время → «HH:MM», иначе «DD.MM». Заменил `tickFormatter={formatTs}` на `xTickFormatter`. `formatTs` остался для тултипа и `tradeTitle`.
+  - Правый отступ: `<LineChart margin={{ right: 88 → 110 }}>` чтобы end-of-line кружки-аватары (`ReferenceDot r={14}`, ~28px) и последний тик оси X не обрезались.
+  - Ничего больше не тронуто: легенда-выделение, таймфреймы, маркеры сделок, данные/тикеры/лидерборд/модалка/табы — без изменений. Зависимостей не добавлял.
+- Валидация: `npm run build` чисто, `npm run lint` чисто (react-hooks/preserve-manual-memoization обошёл — не возвращаю функцию из useMemo, formatter обычная функция), `npm run dev` `/` → 200.
