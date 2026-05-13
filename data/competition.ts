@@ -83,7 +83,7 @@ export const competition: Competition = {
   title: "Реалити-торговля: 2 недели",
   startDate: "2026-05-06",
   endDate: "2026-05-20",
-  note: "Баланс и equity считаются автоматически из сделок · live-PnL из TwelveData по цене входа",
+  note: "Баланс и equity считаются автоматически из сделок",
   tickers: [
     { symbol: "XAUUSD", price: 4640.0, change24h: 0.42 },
     { symbol: "XAGUSD", price: 57.85, change24h: -0.31 },

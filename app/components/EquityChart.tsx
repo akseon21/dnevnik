@@ -325,7 +325,7 @@ export default function EquityChart({
         </div>
       </div>
 
-      <div className="h-[420px] w-full sm:h-[520px] lg:h-[580px]">
+      <div className="h-[480px] w-full sm:h-[600px] lg:h-[720px]">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={displayRows} margin={{ top: 16, right: 110, bottom: 8, left: 8 }}>
             <CartesianGrid stroke="#1f1f24" strokeDasharray="3 3" />

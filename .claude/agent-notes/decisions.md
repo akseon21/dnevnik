@@ -111,6 +111,43 @@
 - `app/page.tsx`: удалён `<Link href="/admin">Админка</Link>` из шапки + неиспользуемый `import Link from "next/link"`. Шапка соревнования (`competition.title`, период, кол-во участников) и «Реалити-торговля · live-дашборд» остались. `/admin` доступна только по прямому URL.
 - Валидация: lint OK, build OK (`/` ƒ, `/admin` ƒ), dev → `/` 200 (нет «Админка»/`href="/admin"` в HTML), `/admin` 200. Push в main → Vercel auto-deploy (building).
 
+## v10.2 — догон по высоте графика и чистая мета-подпись (2026-05-13)
+
+Две точечные правки в продолжение v10.1, обе из чата с Кириллом:
+
+1. **Высота equity-графика поднята ещё**: `h-[420px] sm:h-[520px] lg:h-[580px]` → `h-[480px] sm:h-[600px] lg:h-[720px]` (`app/components/EquityChart.tsx:328`). На стандартном desktop (lg) канвас теперь ~720px — занимает ~70-75% видимой высоты дашборда (после строки тикеров, шапки, лидерборда и тулбара). Мобильный 480px остаётся читаемым (выше пол-экрана типичного телефона ~760-844, но дашборд всё равно скроллится — карточки участников снизу, не сбоку, на мобиле). sm-брейкпоинт 600px — для планшетов в портрете. Решение взято в верхней границе диапазона из задачи.
+
+2. **Хвост `· live-PnL из TwelveData по цене входа` убран из мета-подписи** под графиком (caveat из v10.1 закрыт). Источник правды у поля — `competition_meta.note` в Supabase + статический fallback в `data/competition.ts`. Сделано на ОБОИХ концах:
+   - `data/competition.ts:86` — note = «Баланс и equity считаются автоматически из сделок» (без хвоста).
+   - `supabase/migrations/0008_meta_note.sql` — `update public.competition_meta set note = '...' where note is distinct from '...';`. Идемпотентно: повторный прогон = no-op без ошибок (`IS DISTINCT FROM` корректно сравнивает и NULL). Кирилл прогоняет вручную через Supabase SQL Editor.
+
+UI-код `DashboardShell.tsx` (`📊 ${competition.note} · до следующего обновления: M:SS`) НЕ менялся — он уже корректно склеивал note из источника с динамическим суффиксом таймера. Подменили только сам текст в источнике.
+
+### Что НЕ менял
+- Логику live-цен / Realtime / focus-фильтр / contracts компонентов / любые миграции 0001–0007.
+- Никаких новых файлов кроме миграции 0008.
+- Бесплатный TwelveData fallback / graceful degradation / `useLivePrices` / `useLiveCompetition`.
+
+### Файлы
+- `app/components/EquityChart.tsx` — одна строчка (классы высоты канваса).
+- `data/competition.ts` — одна строчка (note).
+- `supabase/migrations/0008_meta_note.sql` — НОВЫЙ, ~12 строк, идемпотентный UPDATE.
+
+### Валидация
+- `npm run lint` — чисто (0 ошибок).
+- `npm run build` — чисто (Turbopack 2.5s, TS OK). Маршруты прежние: `/` ƒ, `/admin` ƒ, `/api/prices` ƒ, `/api/tickers` ○ 5m. Ожидаемое `[db] ... falling back to static` (env пустой в build-окружении).
+- `npm run test:pnl` — 19/19 pass.
+- `npm run dev` — НЕ запускал (изменения чисто пресентационные: высота canvas + строковый литерал; build-снимок этого достаточно).
+
+### Caveats
+- **До прогона миграции 0008** на проде с Supabase будет старый текст с хвостом — БД пока остаётся источником правды (статический fallback применяется только если env Supabase не задан или fetch упал). Кирилл должен прогнать миграцию, иначе дословный текст не появится.
+- **Realtime после UPDATE** на `competition_meta` — публикация добавлена в 0007, поэтому открытые вкладки дашборда обновятся автоматически (`useLiveCompetition` подписан на `competition_meta`). F5 не нужен.
+
+### Suggested commit message
+`feat(dashboard): taller equity chart + cleaner meta note (drop TwelveData tail)`
+
+---
+
 ## v10.1 — UI-чистка после v10 (по скрину Кирилла, 2026-05-13)
 
 Серия мелких UI-правок поверх v10. Логика данных, миграции, контракты не тронуты — только компоновка / видимость элементов.

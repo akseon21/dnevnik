@@ -1,5 +1,42 @@
 # Текущий статус
 
+## v10.2 — догон по высоте графика + чистая мета-подпись (2026-05-13)
+
+Две точечные правки в продолжение v10.1.
+
+1. **Высота equity-графика поднята**: `h-[480px] sm:h-[600px] lg:h-[720px]` (было `420/520/580`). На lg график занимает ~70-75% видимой высоты дашборда, на sm 600px (планшет в портрете), на мобиле 480px (читаемо, дашборд скроллится — карточки участников снизу).
+
+2. **Хвост `· live-PnL из TwelveData по цене входа` убран из мета-подписи** (caveat из v10.1 закрыт). UI-код DashboardShell.tsx НЕ менялся — подменили сам текст в источнике правды:
+   - `data/competition.ts:86` → note = «Баланс и equity считаются автоматически из сделок» (статический fallback).
+   - `supabase/migrations/0008_meta_note.sql` → идемпотентный UPDATE `competition_meta` (через `IS DISTINCT FROM` — повторный прогон = no-op). Кирилл прогоняет вручную в Supabase SQL Editor.
+
+### Файлы
+- `app/components/EquityChart.tsx` — одна строка (классы высоты).
+- `data/competition.ts` — одна строка (note).
+- `supabase/migrations/0008_meta_note.sql` — НОВЫЙ, ~12 строк.
+- `.claude/agent-notes/{project-map,decisions,current-task}.md` — обновлены.
+
+### Что НЕ менял
+- Логику live-цен / Realtime / focus / контракты компонентов.
+- Другие миграции, lib/db.ts, lib/standings.ts, lib/types.ts, lib/pnl.ts.
+- DashboardShell.tsx (уже корректно склеивает note + ` · до следующего обновления: M:SS`).
+
+### Валидация
+- `npm run lint` — чисто (0 ошибок).
+- `npm run build` — чисто (Turbopack 2.5s, TS OK). Маршруты прежние.
+- `npm run test:pnl` — 19/19 pass.
+- `npm run dev` — НЕ запускал (изменения чисто пресентационные).
+
+### Caveat
+- На проде с Supabase до прогона миграции 0008 текст останется со старым хвостом — БД источник правды. Статический fallback применяется только когда env Supabase не задан.
+- После прогона Realtime (0007) подхватит UPDATE и обновит открытые вкладки автоматически.
+
+### Suggested commit message
+`feat(dashboard): taller equity chart + cleaner meta note (drop TwelveData tail)`
+
+### Ниже — предыдущая запись (v10.1) для контекста
+---
+
 ## v10.1 — UI-чистка после v10 (2026-05-13)
 
 Серия мелких UI-правок поверх v10 по скрину Кирилла. Логика данных, миграции, контракты компонентов наружу — не тронуты, кроме одного: `EquityChart` потерял проп `onFocusChange` (был обвязан с удалённой легендой имён). Полное описание правок и файлы — в `decisions.md` → раздел «v10.1». Кратко:
