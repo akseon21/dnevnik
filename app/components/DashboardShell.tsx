@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import EquityChart from "./EquityChart";
 import ParticipantModal from "./ParticipantModal";
 import Countdown from "./Countdown";
 import Sparkline from "./Sparkline";
 import { useLivePrices } from "./useLivePrices";
+import { useLiveCompetition } from "./useLiveCompetition";
 import {
   formatMoney,
   formatPct,
@@ -27,6 +29,8 @@ type Props = {
   note: string;
   startDate: string;
   endDate: string;
+  /** Стартовое значение для focus, прочитанное на сервере из ?focus= (page.tsx). */
+  initialFocusedName?: string | null;
 };
 
 type TabKey = "open" | "closed";
@@ -199,22 +203,36 @@ function ParticipantCard({
   liveEquity,
   liveUnrealized,
   hasLive,
+  focused,
+  dimmed,
 }: {
   s: ParticipantStat;
   onClick: () => void;
   liveEquity: number; // = s.balance + (live unrealized || s.unrealizedPnl)
   liveUnrealized: number; // Σ live PnL открытых
   hasLive: boolean; // true если хоть для одной открытой позиции есть live-цена
+  focused: boolean; // карточка выбранного фильтр-участника (тёплая обводка)
+  dimmed: boolean; // фильтр активен, но это не выбранный → приглушаем
 }) {
   // «Текущий счёт»: цвет относительно стартового депозита.
-  const equityCls =
-    liveEquity >= s.startValue ? "text-pos" : "text-neg";
+  const equityCls = liveEquity >= s.startValue ? "text-pos" : "text-neg";
+  // Визуальный маркер «выбран»: яркая обводка цветом участника + лёгкая подсветка фона.
+  // Когда фильтр активен и карточка не выбрана — приглушаем opacity (~40%).
+  const wrapperCls = focused
+    ? "border-l-[3px] shadow-[0_0_0_1px_var(--tw-shadow-color)]"
+    : "border-l-[3px]";
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center gap-2.5 rounded-lg border border-l-[3px] border-border bg-panel px-3 py-2.5 text-left transition hover:border-accent/50"
-      style={{ borderLeftColor: s.color }}
+      aria-pressed={focused}
+      className={`flex w-full items-center gap-2.5 rounded-lg border bg-panel px-3 py-2.5 text-left transition hover:border-accent/50 ${wrapperCls} ${dimmed ? "opacity-40" : ""}`}
+      style={{
+        borderLeftColor: s.color,
+        borderColor: focused ? s.color : undefined,
+        boxShadow: focused ? `0 0 0 1px ${s.color}55` : undefined,
+        background: focused ? `linear-gradient(90deg, ${s.color}14, transparent 60%)` : undefined,
+      }}
     >
       <span
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
@@ -223,7 +241,19 @@ function ParticipantCard({
         {initials(s.name)}
       </span>
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
-        <span className="truncate text-xs font-semibold text-foreground">{s.name}</span>
+        <span className="flex items-center gap-1">
+          {focused && (
+            <span
+              aria-hidden="true"
+              className="text-[10px] leading-none"
+              style={{ color: s.color }}
+              title="Фильтр графика"
+            >
+              ◀
+            </span>
+          )}
+          <span className="truncate text-xs font-semibold text-foreground">{s.name}</span>
+        </span>
         <span className="flex items-baseline gap-1.5">
           <span className={`tabular-nums text-xs ${hasLive ? equityCls : "text-foreground"}`}>
             {formatMoney(hasLive ? liveEquity : s.currentValue)}
@@ -266,19 +296,57 @@ export default function DashboardShell({
   note,
   startDate,
   endDate,
+  initialFocusedName = null,
 }: Props) {
-  const allNames = useMemo(() => stats.map((s) => s.name), [stats]);
-  const [selected, setSelected] = useState<string[]>(allNames);
-  const [filterOpen, setFilterOpen] = useState(false);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [tab, setTab] = useState<TabKey>("open");
   const [modalName, setModalName] = useState<string | null>(null);
 
-  const isAll = selected.length === allNames.length;
-  const visible = (name: string) => selected.includes(name);
+  // ── Live-sync участников/сделок/балансов через Supabase Realtime ───────────
+  // Подписываемся на postgres_changes по 5 таблицам. На любое изменение в
+  // /admin (новая сделка, правка депозита, закрытие позиции) → router.refresh()
+  // перезапускает RSC-fetch, новые данные мёрджатся в DashboardShell без потери
+  // фильтров/фокуса/открытой модалки. Если Supabase env нет — деградация в no-op.
+  // Если Realtime канал упал — внутренний fallback на polling 45 сек.
+  useLiveCompetition();
 
-  const shownStats = stats.filter((s) => visible(s.name));
-  const shownLines = lines.filter((l) => visible(l.name));
+  // ── Focus (выделение участника на графике) ─────────────────────────────────
+  // Источник правды — URL `?focus=<name>`. Никакого локального state — читаем
+  // напрямую из useSearchParams. Это автоматически даёт:
+  //   • переживание live re-fetch (RSC обновится, URL не тронут);
+  //   • шарабельную ссылку (F5 / копирование сохраняет focus);
+  //   • back/forward в браузере работают «бесплатно»;
+  //   • если в БД удалили выделенного участника — фильтр становится no-op
+  //     (имени просто нет в stats), а на следующее действие пользователя
+  //     setFocusedName(null) почистит URL.
+  // initialFocusedName используется только для SSR-консистентности (избежать
+  // гидрационных миганий) — фактическое значение всё равно берётся из URL.
+  const focusedName: string | null = (() => {
+    const fromUrl = searchParams.get("focus") ?? initialFocusedName ?? null;
+    return fromUrl && stats.some((s) => s.name === fromUrl) ? fromUrl : null;
+  })();
+
+  const setFocusedName = useCallback(
+    (next: string | null) => {
+      const sp = new URLSearchParams(searchParams.toString());
+      if (next) sp.set("focus", next);
+      else sp.delete("focus");
+      const qs = sp.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [router, pathname, searchParams],
+  );
+
+  const clearFocus = useCallback(() => setFocusedName(null), [setFocusedName]);
+
+  // Все участники теперь всегда видны на графике (фильтр-чипы убраны).
+  // «Выделение» — только подсветка/приглушение через focusedName.
+  const shownStats = stats;
+  const shownLines = lines;
   const modalStat = stats.find((s) => s.name === modalName) ?? null;
+  const focusedStat = focusedName ? stats.find((s) => s.name === focusedName) ?? null : null;
 
   // ── Live prices: уникальные тикеры открытых позиций c entryPrice ──────────
   const liveSymbols = useMemo(() => {
@@ -365,19 +433,13 @@ export default function DashboardShell({
   const hasAnyLiveTarget = liveSymbols.length > 0;
   const hasAnyLivePrice = Object.keys(livePrices).length > 0;
 
-  function toggle(name: string) {
-    setSelected((cur) =>
-      cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name],
-    );
-  }
-
   const allClosed = shownStats.flatMap((s) =>
     s.closedPositions.map((pos) => ({ owner: s.name, ownerColor: s.color, pos })),
   );
 
   return (
     <>
-      {/* ─── Тулбар: пометка + live-статус + отсчёт + фильтр участников ─── */}
+      {/* ─── Тулбар: пометка + live-статус + отсчёт ─── */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-[11px] text-muted">📊 {note}</span>
         <div className="flex items-center gap-2">
@@ -411,48 +473,6 @@ export default function DashboardShell({
             </span>
           )}
           <Countdown startDate={startDate} endDate={endDate} />
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setFilterOpen((v) => !v)}
-              className="rounded-md border border-border bg-panel px-3 py-1.5 text-xs text-foreground hover:border-accent/60"
-            >
-              {isAll ? "Все участники" : `Участники: ${selected.length}/${allNames.length}`}
-              <span className="ml-1.5 text-muted">▾</span>
-            </button>
-            {filterOpen && (
-              <div className="absolute right-0 z-30 mt-1 w-52 rounded-md border border-border bg-panel p-2 shadow-lg">
-                <button
-                  type="button"
-                  onClick={() => setSelected(isAll ? [] : allNames)}
-                  className="mb-1 w-full rounded px-2 py-1 text-left text-xs text-accent hover:bg-border/40"
-                >
-                  {isAll ? "Снять все" : "Выбрать всех"}
-                </button>
-                <div className="max-h-64 overflow-y-auto">
-                  {stats.map((s) => (
-                    <label
-                      key={s.name}
-                      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs hover:bg-border/40"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={visible(s.name)}
-                        onChange={() => toggle(s.name)}
-                        className="accent-current"
-                        style={{ color: s.color }}
-                      />
-                      <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ background: s.color }}
-                      />
-                      <span className="text-foreground">{s.name}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
@@ -460,24 +480,43 @@ export default function DashboardShell({
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         {/* левая колонка: график */}
         <section className="rounded-lg border border-border bg-panel p-3 sm:p-4">
-          <div className="mb-2 flex items-baseline justify-between gap-2">
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <h2 className="text-sm font-bold tracking-tight text-foreground">
               Общий баланс счёта
             </h2>
+            <div className="flex items-baseline gap-2 text-[11px]">
+              <span className="text-muted">график:</span>
+              {focusedStat ? (
+                <>
+                  <span
+                    className="font-semibold tabular-nums"
+                    style={{ color: focusedStat.color }}
+                  >
+                    {focusedStat.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={clearFocus}
+                    className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-accent hover:border-accent"
+                    title="Снять фильтр и показать всех"
+                  >
+                    Все
+                  </button>
+                </>
+              ) : (
+                <span className="font-semibold text-foreground">все</span>
+              )}
+            </div>
           </div>
-          {shownLines.length === 0 ? (
-            <p className="py-12 text-center text-sm text-muted">
-              Выберите участников в фильтре
-            </p>
-          ) : (
-            <EquityChart
-              rows={rows}
-              lines={shownLines}
-              stats={shownStats}
-              onParticipantClick={(name) => setModalName(name)}
-              liveUnrealizedByName={liveUnrealizedByName}
-            />
-          )}
+          <EquityChart
+            rows={rows}
+            lines={shownLines}
+            stats={shownStats}
+            onParticipantClick={(name) => setModalName(name)}
+            liveUnrealizedByName={liveUnrealizedByName}
+            focusedName={focusedName}
+            onFocusChange={setFocusedName}
+          />
         </section>
 
         {/* правая колонка: табы + карточки участников */}
@@ -499,16 +538,30 @@ export default function DashboardShell({
             ))}
           </div>
           <div className="flex flex-col gap-2 lg:max-h-[420px] lg:overflow-y-auto lg:pr-1">
-            <div className="text-[10px] uppercase tracking-widest text-muted">
-              Участники · {shownStats.length}
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[10px] uppercase tracking-widest text-muted">
+                Участники · {shownStats.length}
+              </div>
+              {focusedName && (
+                <button
+                  type="button"
+                  onClick={clearFocus}
+                  className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-accent hover:border-accent"
+                  title="Снять выделение с участника"
+                >
+                  Показать всех
+                </button>
+              )}
             </div>
             {shownStats.length === 0 ? (
-              <p className="py-3 text-center text-xs text-muted">Никого не выбрано</p>
+              <p className="py-3 text-center text-xs text-muted">Участников нет</p>
             ) : (
               shownStats.map((s) => {
                 const liveUnrealized = liveUnrealizedByName.get(s.name) ?? s.unrealizedPnl;
                 const cov = liveCoverageByName.get(s.name);
                 const hasLive = !!cov && cov.live > 0;
+                const isFocused = focusedName === s.name;
+                const isDimmed = focusedName !== null && !isFocused;
                 return (
                   <ParticipantCard
                     key={s.name}
@@ -517,6 +570,8 @@ export default function DashboardShell({
                     liveEquity={s.balance + liveUnrealized}
                     liveUnrealized={liveUnrealized}
                     hasLive={hasLive}
+                    focused={isFocused}
+                    dimmed={isDimmed}
                   />
                 );
               })
@@ -603,7 +658,12 @@ export default function DashboardShell({
       {modalStat && (
         <ParticipantModal
           stat={modalStat}
-          onClose={() => setModalName(null)}
+          onClose={() => {
+            // По спеке: закрытие модалки = «оставить выделенным этого участника на графике».
+            // (a) если уже выделен — выделение остаётся; (b) если другой — переключаем.
+            setFocusedName(modalStat.name);
+            setModalName(null);
+          }}
           liveUnrealized={liveUnrealizedByName.get(modalStat.name) ?? null}
           livePnlByPosKey={livePnlByPosKey}
           livePrices={livePrices}

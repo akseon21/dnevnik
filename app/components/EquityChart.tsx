@@ -35,6 +35,12 @@ type Props = {
    * вместо ручного s.unrealizedPnl. Если null/undefined — фолбэк на stats.
    */
   liveUnrealizedByName?: Map<string, number> | null;
+  /**
+   * Выделенный участник: его линия рисуется ярче и толще, остальные — приглушённые.
+   * null — все линии в полную силу. Источник правды — родитель (DashboardShell + URL).
+   */
+  focusedName?: string | null;
+  onFocusChange?: (name: string | null) => void;
 };
 
 // ── таймфреймы ───────────────────────────────────────────────────────────────
@@ -132,8 +138,18 @@ export default function EquityChart({
   stats,
   onParticipantClick,
   liveUnrealizedByName,
+  focusedName = null,
+  onFocusChange,
 }: Props) {
-  const [highlight, setHighlight] = useState<string | null>(null);
+  // «highlight» теперь полностью контролируется родителем (focusedName + onFocusChange).
+  // Это нужно чтобы выделение переживало live re-fetch и было синхронизировано с боковой
+  // панелью / URL ?focus=. Если onFocusChange не передан — компонент работает в read-only.
+  const highlight = focusedName;
+  function setHighlight(updater: string | null | ((cur: string | null) => string | null)) {
+    if (!onFocusChange) return;
+    const next = typeof updater === "function" ? updater(highlight) : updater;
+    onFocusChange(next);
+  }
   const [tf, setTf] = useState<TimeframeKey>("all");
   const [mode, setMode] = useState<ChartMode>("balance");
 

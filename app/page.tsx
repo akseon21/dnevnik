@@ -14,7 +14,12 @@ import EventTicker from "./components/EventTicker";
 // Данные могут приходить из Supabase — не кешируем агрессивно.
 export const revalidate = 0;
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  // Next 16 — searchParams это Promise.
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const competition = await getCompetitionData();
   const stats = getParticipantStats(competition);
   const top = getLeaderboard(stats);
@@ -24,6 +29,15 @@ export default async function Home() {
     color: p.color,
   }));
   const feedEvents = getFeedEvents(competition);
+
+  // ?focus=<participant_name> — стартовый «выделенный» участник на графике
+  // (state живёт в URL чтобы переживать live re-fetch и быть шарабельным).
+  const sp = await searchParams;
+  const focusRaw = Array.isArray(sp.focus) ? sp.focus[0] : sp.focus;
+  const initialFocusedName =
+    focusRaw && competition.participants.some((p) => p.name === focusRaw)
+      ? focusRaw
+      : null;
 
   const periodLabel = `${formatTs(competition.startDate)} — ${formatTs(competition.endDate)}`;
   const eventStartLabel = `Соревнование стартует ${formatTs(competition.startDate)}`;
@@ -56,7 +70,7 @@ export default async function Home() {
       {/* ─── Бегущая лента событий (закрытые сделки) ─── */}
       <EventTicker events={feedEvents} startLabel={eventStartLabel} />
 
-      {/* ─── Интерактивная часть: фильтр + график + участники + табы ─── */}
+      {/* ─── Интерактивная часть: график + боковая панель участников + табы ─── */}
       <DashboardShell
         stats={stats}
         rows={rows}
@@ -64,6 +78,7 @@ export default async function Home() {
         note={competition.note}
         startDate={competition.startDate}
         endDate={competition.endDate}
+        initialFocusedName={initialFocusedName}
       />
 
       <footer className="pt-2 text-center text-[10px] text-muted">

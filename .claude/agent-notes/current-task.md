@@ -1,5 +1,89 @@
 # Текущий статус
 
+## v10 — Live-sync через Supabase Realtime + focus-фильтр в боковой панели + URL-state (2026-05-13)
+
+**Две связанные UX-задачи** после v9.2.
+
+### Задача 2 — Фильтр участников переехал в боковую панель + выделение графика
+
+**Что было.** Сверху дашборда висел дропдаун-фильтр «Все участники / Участники: N/M» с чекбоксами. Клик по карточке справа — открывал модалку. Клик-выделение линии работало через локальный `highlight` в `EquityChart` (легенда).
+
+**Что стало.**
+- **Удалена верхняя полоса фильтр-чипов** (дропдаун `setSelected/filterOpen/isAll/visible/toggle` из `DashboardShell.tsx`). График всегда показывает всех.
+- **Новый «focus»-фильтр** (выделение одного участника):
+  - Источник правды — URL `?focus=<имя>`. Никакого дублирующего локального state. Читаем через `useSearchParams()`, пишем через `router.replace(..., { scroll: false })`. Это даёт автоматом: переживание live re-fetch, шарабельную ссылку, back/forward, гидрационную консистентность (стартовое значение читается на сервере в `app/page.tsx` и передаётся `initialFocusedName` пропом → нет миганий).
+  - **Закрытие модалки → set focus = этот участник** (по спеке: «остаётся выделенной его линия»). Если уже выделен — выделение остаётся. Если другой — переключается.
+  - **Клик по тому же в боковой панели** = открывает модалку (на снятие — кнопка «Показать всех» или «Все» в заголовке графика, либо повторное открытие/закрытие модалки на том же — re-set, не toggle; снятие — отдельной кнопкой).
+  - **Кнопки снятия фильтра**: «Все» в заголовке графика рядом с «график: <имя>» + «Показать всех» в шапке боковой панели (только когда фильтр активен).
+- **Визуальный маркер «выбран» в боковой панели**: `ParticipantCard` получил пропсы `focused`/`dimmed`. Выбранная карточка — обводка цветом участника + лёгкая радужка градиента + маленькая стрелка `◀` слева от имени. Остальные — `opacity-40`.
+- **График**: `EquityChart` теперь принимает `focusedName` + `onFocusChange` пропами (раньше держал `highlight` сам). Локальный state удалён — поведение полностью контролируется родителем. Линия выделенного — толще (strokeWidth 3 vs 2) и непрозрачная, остальные — `strokeOpacity 0.18`. Маркеры закрытых сделок и end-point-кружки на чужих линиях тоже dim-ятся.
+- **Заголовок графика**: «график: <имя цвета участника>» когда фильтр активен; «график: все» когда нет. Рядом — кнопка «Все» для сброса.
+- **`app/page.tsx`** — теперь `async` с `searchParams: Promise<...>`, читает `focus` из URL на сервере, валидирует против списка участников, передаёт `initialFocusedName` в `DashboardShell`. SSR не сломан.
+
+**Файлы:**
+- `app/components/DashboardShell.tsx` — большая правка: удалён старый фильтр, добавлен focus-flow + URL-sync, переписан `ParticipantCard`, добавлен подзаголовок графика.
+- `app/components/EquityChart.tsx` — `highlight` теперь контролируется родителем через пропсы.
+- `app/components/ParticipantModal.tsx` — НЕ менялся (контракт `onClose` остался; новое поведение задаётся в родителе).
+- `app/page.tsx` — `searchParams` Promise + парсинг `focus`.
+
+### Задача 1 — Live-sync участников/сделок/балансов через Supabase Realtime (вариант B)
+
+**Выбран вариант B (Realtime websocket), не A (polling).** Обоснование:
+- True realtime → изменение в `/admin` Кириллом отображается у зрителей за <1 сек, что соответствует «живой витрине».
+- Supabase даёт фичу искаропки, дополнительных deps не нужно — у нас уже `@supabase/supabase-js`.
+- Polling 30-60 сек = задержка до минуты + лишняя нагрузка на бесплатный tier при N зрителях × 2 req/мин.
+- **Polling включён внутренне как fallback** — если Realtime канал не открылся (CHANNEL_ERROR / TIMED_OUT) или Supabase инициализация бросила, хук молча переключается на `setInterval(router.refresh, 45_000)`. То есть «B с автодеградацией в A», не «B вместо A».
+
+**Архитектурное решение — `router.refresh()`, не дублирующий fetch на клиенте:**
+- Хук `useLiveCompetition()` подписывается на `postgres_changes` по 5 таблицам и при любом событии вызывает `router.refresh()` (с дебаунсом 400 мс — несколько событий от одного admin-action склеиваются в один re-fetch).
+- `router.refresh()` перезапускает RSC `getCompetitionData()` в `app/page.tsx`, мёрджит обновлённый payload и СОХРАНЯЕТ client state (фильтры, табы, focus в URL, открытую модалку, состояние графика). Не нужно ни SWR, ни React Query, ни клиентского кэша — Next 16 это уже делает (документировано в `node_modules/next/dist/docs/01-app/03-api-reference/04-functions/use-router.md`: «merge the updated React Server Component payload without losing unaffected client-side React (e.g. useState) or browser state (e.g. scroll position)»).
+- Это идиоматично для Next App Router и даёт минимальный сurface-area: ВСЯ логика fetch-а остаётся в одном месте (`lib/db.ts`), а клиент только триггерит revalidation.
+
+**Дебаунс 400 мс**: одно server action в `/admin` (например `closeTrade` обновляет `positions` + `balance_points`) даёт 2-3 события WebSocket. Без дебаунса — 2-3 `router.refresh()` подряд. С дебаунсом — один.
+
+**Graceful degradation:**
+1. Нет `NEXT_PUBLIC_SUPABASE_URL` / `_ANON_KEY` → no-op (статика, данные не меняются между рендерами, нечего обновлять).
+2. Realtime publication для таблицы не настроена → channel.subscribe() придёт CHANNEL_ERROR → polling 45 сек.
+3. WebSocket вообще не открывается (фаервол / лимит) → TIMED_OUT → polling.
+4. createClient бросил → catch → polling.
+
+**Файлы:**
+- `app/components/useLiveCompetition.ts` — НОВЫЙ хук, ~110 строк. SSR-safe (всё в useEffect, без window-зависимостей в render). Без локального state — render возвращает void.
+- `app/components/DashboardShell.tsx` — одна строчка вызова `useLiveCompetition()` в теле компонента.
+- `supabase/migrations/0007_realtime.sql` — НОВАЯ миграция: `alter publication supabase_realtime add table participants, positions, balance_points, competition_meta, tickers`. Идемпотентна (DO-блок с проверкой `pg_publication_tables` — повторный прогон = no-op без ошибок).
+
+**Что Кириллу сделать:**
+1. **Прогнать `supabase/migrations/0007_realtime.sql`** в Supabase SQL Editor → активирует Realtime publication для 5 таблиц. Без этого хук переключится на polling-fallback (45 сек) — работать будет, но без мгновенности.
+2. (опц.) В Supabase Dashboard → Database → Replication → проверить что таблицы в supabase_realtime publication отмечены (визуальное подтверждение того что сделала миграция).
+3. **Тест:** открыть `/` в одной вкладке, `/admin` в другой → создать/закрыть сделку → главная вкладка должна обновиться без F5 в течение 1 сек (Realtime) или ~45 сек (polling-fallback если миграция не прогнана).
+4. Ревью + коммит.
+
+### Что НЕ менял
+- `lib/db.ts`, `lib/standings.ts`, `lib/types.ts`, `lib/pnl.ts`, админка (`actions.ts`, `AdminPanel.tsx`, `admin/page.tsx`), `EquityChart` логика расчёта линий, `ParticipantModal` (контракт onClose), `TickerStrip`, `Leaderboard`, `EventTicker`, `Sparkline`, `Countdown` — не тронуты.
+- Существующие миграции 0001–0006 — не тронуты.
+- Никаких новых deps (Supabase Realtime — часть `@supabase/supabase-js`, который уже стоял).
+
+### Валидация v10
+- `npm run lint` — чисто (0 ошибок). Решены все 4 проблемы первой итерации (set-state-in-effect × 2, refs-in-render × 1, no-unused-vars × 1) — переход на URL-as-state и убрали лишний ref.
+- `npm run build` — чисто (Turbopack 3.2s, TS OK). Маршруты не изменились: `/` ƒ, `/admin` ƒ, `/api/prices` ƒ, `/api/tickers` ○ 5m. Ожидаемое сообщение `[db] ... falling back to static` (БД-схема старее текущего кода — graceful path).
+- `npm run test:pnl` — 19/19 pass (контракт `lib/pnl.ts` не менялся).
+- `npm run dev` (порт 4988) — `/` 200; `/?focus=Андрей` 200, в HTML видно «график: Андрей» цветом #22d3ee; `/` без параметра — «график: все»; верхней фильтр-полосы (старый дропдаун) в HTML НЕТ. Гидрация без ошибок. Pre-existing recharts SSR warning остался (зафиксировано в decisions.md как известный, не блокер).
+
+### Caveats
+- **Realtime у Supabase Free Tier**: 200 одновременных подключений, 200 каналов, 2 млн сообщений/мес. Для демо-витрины с 5-50 зрителями — за глаза. Если пойдут сотни — пересмотреть (или включить filtering/throttling в хуке).
+- **Hot reload в dev**: HMR пересоздаёт effect → канал переподписывается. Не баг, но в `tail -f` лога Supabase можно увидеть мерцание.
+- **router.refresh() не дешёвый** — это полный RSC re-render. Дебаунс 400 мс защищает от штормов. Если когда-то пойдут сотни событий/сек — добавить throttle (например `eventsPerSecond: 5` уже стоит в realtime-config).
+- **Focus в URL — кириллица**: `router.replace` сам делает encodeURIComponent → URL `?focus=%D0%90%D0%BD%D0%B4%D1%80%D0%B5%D0%B9` корректен и шарабелен. В отображении адреса браузер может показать как `?focus=Андрей`.
+- **Click outside для снятия focus** — НЕ реализован буквально (клик по графиковой зоне вне линий — recharts это сложно перехватить). Замена: явные кнопки «Показать всех» и «Все» в заголовке графика, плюс escape сбрасывает только модалку. Это проще и понятнее, чем «магический» клик-фон.
+- **Таб «Открытые позиции»** под графиком — НЕ диммится по focusedName. Решение сознательное: фокус — это про график и список участников; в таблице позиций dimming усложнил бы UX (там карточки с таблицами).
+- **`app/page.tsx` стал dynamic** — `searchParams` это Request-time API → page всегда динамическая. У нас уже `revalidate = 0`, так что регресса нет.
+- **`useLiveCompetition` создаёт `createClient` каждый раз при mount хука** — отдельный от `lib/supabase.ts:getAnonClient()`. Дубликат сознательный: `lib/supabase.ts` помечен как server-only, импортить его в client-component = тянуть `service_role` ключ в bundle. Хук создаёт лёгкий anon-клиент в браузере с минимальными опциями.
+
+### Suggested commit message
+`feat(dashboard): live-sync via Supabase Realtime + focus filter in sidebar with URL state`
+
+---
+
 ## v9.2 — Расширение демо-сида с 6 до 15 участников (2026-05-13)
 
 **Идея:** для красивой демо-картинки (более насыщенный график, разнообразие equity-кривых) расширил сид с 6 участников до 15 — добавил ещё 9.
