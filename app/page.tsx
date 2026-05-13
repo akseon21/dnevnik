@@ -45,6 +45,12 @@ export default async function Home({
   return (
     <main className="mx-auto flex min-h-full max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6">
       {/* ─── Заголовок ─── */}
+      {/*
+        v10.1: правый подзаголовок «Реалити-торговля · live-дашборд» убран по
+        правке Кирилла — он дублировал competition.title слева и засорял шапку.
+        Сам competition.title (из БД) остаётся видимым, но его дубли в виде
+        правого ярлыка/футера убраны.
+      */}
       <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-4">
         <div>
           <h1 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">
@@ -53,11 +59,6 @@ export default async function Home({
           <p className="mt-0.5 text-xs text-muted">
             Период: {periodLabel} · Участников: {competition.participants.length}
           </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="text-[10px] uppercase tracking-widest text-muted">
-            Реалити-торговля · live-дашборд
-          </div>
         </div>
       </header>
 
@@ -81,9 +82,11 @@ export default async function Home({
         initialFocusedName={initialFocusedName}
       />
 
-      <footer className="pt-2 text-center text-[10px] text-muted">
-        {competition.title} · {new Date().getFullYear()}
-      </footer>
+      {/*
+        v10.1: футер «competition.title · YYYY» убран по правке Кирилла —
+        дубль заголовка снизу не нёс смысла. Метаданные соревнования
+        остаются в БД (competition_meta.title), это только UI-чистка.
+      */}
     </main>
   );
 }

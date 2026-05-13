@@ -364,6 +364,15 @@ export default function DashboardShell({
   const live = useLivePrices(liveSymbols);
   const livePrices = live.prices;
 
+  // Если live-канал TwelveData недоступен (нет ключа / 429 / сеть упала) — пишем
+  // warning в консоль для разработки. UI-индикатор «live выкл» убран из видимого
+  // дашборда по правке UI v10.1, но сигнал должен оставаться доступным разработчику.
+  useEffect(() => {
+    if (live.stale && live.error) {
+      console.warn(`[useLivePrices] stale: ${live.error}`);
+    }
+  }, [live.stale, live.error]);
+
   // Live PnL по позициям и Σ live PnL по участникам.
   // Если live-цены для инструмента ещё нет (loading / source=static / нет ключа) —
   // фолбэк на ручной pos.unrealizedPnl, чтобы UI не «прыгал» в ноль.
@@ -404,34 +413,40 @@ export default function DashboardShell({
     return { livePnlByPosKey: byPos, liveUnrealizedByName: byName, liveCoverageByName: coverage };
   }, [stats, livePrices]);
 
-  // Тикер «обновлено N сек назад»
+  // ── Обратный таймер до следующего опроса цен (для мета-подписи под графиком) ──
+  // Тикает раз в секунду чтобы текст «1:42» был живым. Старт отсчёта = последний
+  // удачный fetch цен (live.fetchedAt). Шаг — NEXT_PUBLIC_PRICES_REFRESH_MS.
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
-    const id = setInterval(() => setNowMs(Date.now()), 5_000);
+    const id = setInterval(() => setNowMs(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
   const fetchedMs = live.fetchedAt ? new Date(live.fetchedAt).getTime() : null;
-  const ageSec = fetchedMs ? Math.max(0, Math.floor((nowMs - fetchedMs) / 1000)) : null;
-
-  function ageLabel(): string {
-    if (ageSec == null) return "—";
-    if (ageSec < 60) return `${ageSec} сек назад`;
-    const m = Math.floor(ageSec / 60);
-    if (m < 60) return `${m} мин назад`;
-    const h = Math.floor(m / 60);
-    return `${h} ч назад`;
-  }
-
-  function fetchedLabel(): string {
-    if (!live.fetchedAt) return "";
-    const d = new Date(live.fetchedAt);
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${hh}:${mm}`;
-  }
-
+  const refreshMs = (() => {
+    const raw = process.env.NEXT_PUBLIC_PRICES_REFRESH_MS;
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n >= 5_000 ? n : 120_000;
+  })();
   const hasAnyLiveTarget = liveSymbols.length > 0;
-  const hasAnyLivePrice = Object.keys(livePrices).length > 0;
+  // Показываем таймер только когда поллинг реально идёт и есть точка отсчёта.
+  // Если нет открытых позиций требующих live (нечего поллить) или цена ещё ни
+  // разу не пришла (live.stale без данных) — таймер скрыт, чтобы не путать.
+  const showCountdown =
+    hasAnyLiveTarget && fetchedMs != null && !live.stale;
+  const remainSec = showCountdown
+    ? Math.max(0, Math.ceil((fetchedMs! + refreshMs - nowMs) / 1000))
+    : null;
+  function fmtCountdown(s: number): string {
+    const m = Math.floor(s / 60);
+    const ss = s % 60;
+    return `${m}:${String(ss).padStart(2, "0")}`;
+  }
+  // Текст про следующее обновление (приклеивается к note под графиком).
+  const nextUpdateSuffix = showCountdown
+    ? ` · до следующего обновления: ${fmtCountdown(remainSec ?? 0)}`
+    : hasAnyLiveTarget
+      ? " · обновление вручную"
+      : "";
 
   const allClosed = shownStats.flatMap((s) =>
     s.closedPositions.map((pos) => ({ owner: s.name, ownerColor: s.color, pos })),
@@ -439,39 +454,19 @@ export default function DashboardShell({
 
   return (
     <>
-      {/* ─── Тулбар: пометка + live-статус + отсчёт ─── */}
+      {/* ─── Тулбар: мета-подпись (с обратным таймером до след. поллинга цен) + Countdown соревнования ─── */}
+      {/*
+        v10.1: индикатор «● live выкл / обновлено N сек назад» убран из видимого
+        UI по правке Кирилла. Если live-канал упал (live.stale) — пишем в консоль
+        для разработки, но не показываем виджет. Сама мета-подпись теперь несёт
+        живой обратный таймер до следующего fetch цен (см. nextUpdateSuffix).
+      */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[11px] text-muted">📊 {note}</span>
+        <span className="text-[11px] text-muted">
+          📊 {note}
+          {nextUpdateSuffix}
+        </span>
         <div className="flex items-center gap-2">
-          {hasAnyLiveTarget && (
-            <span
-              className={`flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-[10px] tabular-nums ${
-                live.stale ? "text-neg" : hasAnyLivePrice ? "text-pos" : "text-muted"
-              }`}
-              title={
-                live.stale
-                  ? `Данные на момент ${fetchedLabel()} (источник цен недоступен${
-                      live.error ? `: ${live.error}` : ""
-                    })`
-                  : hasAnyLivePrice
-                    ? `Live-цены TwelveData. Обновлено ${ageLabel()}`
-                    : "Жду первое обновление цен..."
-              }
-            >
-              <span
-                className={`inline-block h-1.5 w-1.5 rounded-full ${
-                  live.stale ? "bg-neg" : hasAnyLivePrice ? "bg-pos" : "bg-muted"
-                }`}
-              />
-              {hasAnyLivePrice
-                ? live.stale
-                  ? `данные на ${fetchedLabel()}`
-                  : `обновлено ${ageLabel()}`
-                : live.loading
-                  ? "загрузка цен..."
-                  : "live выкл"}
-            </span>
-          )}
           <Countdown startDate={startDate} endDate={endDate} />
         </div>
       </div>
@@ -515,7 +510,6 @@ export default function DashboardShell({
             onParticipantClick={(name) => setModalName(name)}
             liveUnrealizedByName={liveUnrealizedByName}
             focusedName={focusedName}
-            onFocusChange={setFocusedName}
           />
         </section>
 

@@ -40,7 +40,6 @@ type Props = {
    * null — все линии в полную силу. Источник правды — родитель (DashboardShell + URL).
    */
   focusedName?: string | null;
-  onFocusChange?: (name: string | null) => void;
 };
 
 // ── таймфреймы ───────────────────────────────────────────────────────────────
@@ -139,17 +138,12 @@ export default function EquityChart({
   onParticipantClick,
   liveUnrealizedByName,
   focusedName = null,
-  onFocusChange,
 }: Props) {
-  // «highlight» теперь полностью контролируется родителем (focusedName + onFocusChange).
+  // «highlight» полностью контролируется родителем (focusedName + onFocusChange).
   // Это нужно чтобы выделение переживало live re-fetch и было синхронизировано с боковой
-  // панелью / URL ?focus=. Если onFocusChange не передан — компонент работает в read-only.
+  // панелью / URL ?focus=. Снимать выделение можно через кнопки «Все» / «Показать всех»
+  // или клик по карточке участника (в DashboardShell). Локальной легенды у графика нет.
   const highlight = focusedName;
-  function setHighlight(updater: string | null | ((cur: string | null) => string | null)) {
-    if (!onFocusChange) return;
-    const next = typeof updater === "function" ? updater(highlight) : updater;
-    onFocusChange(next);
-  }
   const [tf, setTf] = useState<TimeframeKey>("all");
   const [mode, setMode] = useState<ChartMode>("balance");
 
@@ -331,7 +325,7 @@ export default function EquityChart({
         </div>
       </div>
 
-      <div className="h-[340px] w-full sm:h-[420px]">
+      <div className="h-[420px] w-full sm:h-[520px] lg:h-[580px]">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={displayRows} margin={{ top: 16, right: 110, bottom: 8, left: 8 }}>
             <CartesianGrid stroke="#1f1f24" strokeDasharray="3 3" />
@@ -419,49 +413,22 @@ export default function EquityChart({
         </ResponsiveContainer>
       </div>
 
-      {/* интерактивная легенда: клик по имени — выделить линию */}
-      <div className="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1 text-xs">
-        {endPoints.map(
-          (ep) =>
-            ep && (
-              <button
-                key={ep.name}
-                type="button"
-                onClick={() => setHighlight((cur) => (cur === ep.name ? null : ep.name))}
-                className={`flex items-center gap-1.5 rounded px-1.5 py-0.5 transition ${
-                  highlight === ep.name
-                    ? "bg-border/60 font-semibold"
-                    : highlight !== null
-                      ? "opacity-40 hover:opacity-100"
-                      : "hover:bg-border/40"
-                }`}
-              >
-                <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ background: ep.color }}
-                />
-                <span className="text-foreground">{ep.name}</span>
-                <span className="tabular-nums text-muted">{formatMoney(ep.value)}</span>
-              </button>
-            )
-        )}
-        {highlight !== null && (
-          <button
-            type="button"
-            onClick={() => setHighlight(null)}
-            className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-accent hover:bg-border/40"
-          >
-            сбросить
-          </button>
-        )}
-        {tradeMarkers.length > 0 && (
-          <span className="ml-auto flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted">
+      {/*
+        Имена участников + балансы продублированы в боковой панели справа
+        (ParticipantCard) и подписаны на концах линий — поэтому отдельная
+        легенда здесь убрана (v10.1, по правке UI). Кликом по самой линии
+        / по карточке справа можно выделить участника. Снять выделение —
+        кнопка «Все» в заголовке графика и «Показать всех» в боковой панели.
+      */}
+      {tradeMarkers.length > 0 && (
+        <div className="mt-2 flex justify-end text-xs">
+          <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted">
             <span className="inline-block h-2 w-2 rounded-full" style={{ background: "var(--pos)" }} />
             <span className="inline-block h-2 w-2 rounded-full" style={{ background: "var(--neg)" }} />
             закрытые сделки
           </span>
-        )}
-      </div>
+        </div>
+      )}
       {mode === "equity" && (
         <p className="mt-1 text-[10px] text-muted">
           {hasUnrealized
