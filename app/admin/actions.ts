@@ -90,6 +90,9 @@ export type AdminPositionRow = {
   status: "open" | "closed";
   opened_at: string | null;
   closed_at: string | null;
+  // v9.1 — цена входа: если задана, нереализ. PnL пересчитывается live из текущей
+  // рыночной цены TwelveData. Если null — fallback на ручной unrealized_pnl ниже.
+  entry_price: number | null;
 };
 
 export type AdminParticipantRow = {
@@ -205,6 +208,22 @@ export async function getAdminData(): Promise<AdminData | null> {
   const rawParticipants = ((pRes.data ?? []) as RawParticipant[]) ?? [];
   const rawPositions = ((posRes.data ?? []) as RawPosition[]) ?? [];
 
+  // v9.1 — entry_price тянем отдельным best-effort запросом: если колонки ещё
+  // нет в БД (миграция 0004 не прогнана) — пропускаем без шума, форма просто
+  // покажет пустое поле, а сохранение не запишет колонку (отдельная защита в
+  // openTrade/updateTrade — try/catch при INSERT/UPDATE).
+  const entryByPosId = new Map<string, number | null>();
+  try {
+    const epRes = await db.from("positions").select("id, entry_price");
+    if (!epRes.error && Array.isArray(epRes.data)) {
+      for (const r of epRes.data as { id: string; entry_price: unknown }[]) {
+        entryByPosId.set(r.id, nOrNull(r.entry_price));
+      }
+    }
+  } catch {
+    // колонки ещё нет — пропускаем
+  }
+
   const positions: AdminPositionRow[] = rawPositions.map((q) => ({
     id: q.id,
     participant_id: q.participant_id,
@@ -218,6 +237,7 @@ export async function getAdminData(): Promise<AdminData | null> {
     status: q.status,
     opened_at: q.opened_at,
     closed_at: q.closed_at,
+    entry_price: entryByPosId.has(q.id) ? entryByPosId.get(q.id) ?? null : null,
   }));
 
   const participants: AdminParticipantRow[] = rawParticipants.map((p) => {
@@ -298,6 +318,13 @@ function toIso(v: string): string {
   return toIsoOrNull(v) ?? new Date().toISOString();
 }
 
+/** Распознаём postgres-ошибку «такой колонки в таблице нет» (entry_price без миграции 0004). */
+function isMissingEntryPriceError(msg: string | undefined): boolean {
+  if (!msg) return false;
+  const m = msg.toLowerCase();
+  return m.includes("entry_price") && (m.includes("does not exist") || m.includes("column"));
+}
+
 // ── открыть сделку ───────────────────────────────────────────────────────────
 export async function openTrade(
   _prev: ActionResult | null,
@@ -311,9 +338,10 @@ export async function openTrade(
     const margin = numField(formData, "margin");
     const exit_plan = strField(formData, "exit_plan");
     const opened_at = toIso(strField(formData, "opened_at"));
+    const entry_price = numFieldOrNull(formData, "entry_price");
     if (!participant_id || !instrument)
       return { ok: false, error: "Участник и инструмент обязательны" };
-    const { error } = await db.from("positions").insert({
+    const base = {
       participant_id,
       side,
       instrument,
@@ -322,10 +350,15 @@ export async function openTrade(
       exit_plan,
       unrealized_pnl: 0,
       realized_pnl: null,
-      status: "open",
+      status: "open" as const,
       opened_at,
       closed_at: null,
-    });
+    };
+    let { error } = await db.from("positions").insert({ ...base, entry_price });
+    // graceful: если миграция 0004 ещё не прогнана — пишем без entry_price
+    if (error && isMissingEntryPriceError(error.message)) {
+      ({ error } = await db.from("positions").insert(base));
+    }
     return error ? { ok: false, error: error.message } : ok(`Сделка открыта: ${side} ${instrument}`);
   });
 }
@@ -381,28 +414,45 @@ export async function updateTrade(
     const margin = numField(formData, "margin");
     const exit_plan = strField(formData, "exit_plan");
     const opened_at = toIso(strField(formData, "opened_at"));
+    const entry_price = numFieldOrNull(formData, "entry_price");
     if (!instrument) return { ok: false, error: "Инструмент обязателен" };
 
     const base = { side, instrument, lot, margin, exit_plan, opened_at };
+
+    /** UPDATE с entry_price; при отсутствии колонки (0004 не прогнана) — повтор без неё. */
+    async function updateRow(extra: Record<string, unknown>): Promise<{ error: { message: string } | null }> {
+      let res = await db
+        .from("positions")
+        .update({ ...base, ...extra, entry_price })
+        .eq("id", id);
+      if (res.error && isMissingEntryPriceError(res.error.message)) {
+        res = await db.from("positions").update({ ...base, ...extra }).eq("id", id);
+      }
+      return { error: res.error ? { message: res.error.message } : null };
+    }
 
     if (status === "closed") {
       const realized_pnl = numFieldOrNull(formData, "realized_pnl");
       if (realized_pnl == null)
         return { ok: false, error: "Для закрытой сделки укажите итоговый результат" };
       const closed_at = toIso(strField(formData, "closed_at"));
-      const { error } = await db
-        .from("positions")
-        .update({ ...base, status: "closed", realized_pnl, closed_at, unrealized_pnl: 0 })
-        .eq("id", id);
+      const { error } = await updateRow({
+        status: "closed",
+        realized_pnl,
+        closed_at,
+        unrealized_pnl: 0,
+      });
       return error ? { ok: false, error: error.message } : ok("Сделка обновлена");
     }
 
     // open: позволяем поправить и плавающий PnL
     const unrealized_pnl = numField(formData, "unrealized_pnl");
-    const { error } = await db
-      .from("positions")
-      .update({ ...base, status: "open", unrealized_pnl, realized_pnl: null, closed_at: null })
-      .eq("id", id);
+    const { error } = await updateRow({
+      status: "open",
+      unrealized_pnl,
+      realized_pnl: null,
+      closed_at: null,
+    });
     return error ? { ok: false, error: error.message } : ok("Сделка обновлена");
   });
 }

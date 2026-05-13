@@ -38,6 +38,19 @@ function fmtMoney(v: number): string {
   const sign = v < 0 ? "-" : "";
   return sign + "$" + Math.abs(Math.round(v)).toLocaleString("ru-RU");
 }
+
+/**
+ * Шаг numeric-инпута для цены входа: разный для разных инструментов
+ * (BTC ≈ десятки тысяч → шаг 1; XAU/XAG ≈ десятки/тысячи → 0.01;
+ * USDJPY ≈ 150 → 0.01; мажоры ≈ 1.x → 0.0001). По умолчанию 0.0001.
+ */
+function entryPriceStep(instrument: string): string {
+  const s = (instrument || "").toUpperCase();
+  if (s === "BTCUSD") return "1";
+  if (s === "XAUUSD" || s === "XAGUSD") return "0.01";
+  if (s.startsWith("USD") && s.length === 6) return "0.01"; // USDJPY/USDCHF/USDCAD
+  return "0.0001"; // EURUSD, GBPUSD, AUDUSD ...
+}
 function fmtPct(v: number): string {
   const sign = v > 0 ? "+" : "";
   return sign + v.toFixed(1) + "%";
@@ -257,7 +270,8 @@ function ParticipantTrades({
       q.status === "closed"
         ? ` · результат ${fmtMoney(q.realized_pnl ?? 0)}`
         : ` · плав. PnL ${fmtMoney(q.unrealized_pnl)}`;
-    return `${q.side} ${q.instrument} · ${q.lot} лот · маржа ${fmtMoney(q.margin)}${pnl}`;
+    const entry = q.entry_price != null ? ` · вход ${q.entry_price}` : "";
+    return `${q.side} ${q.instrument} · ${q.lot} лот · маржа ${fmtMoney(q.margin)}${entry}${pnl}`;
   }
 
   function EditForm({ q }: { q: AdminPositionRow }) {
@@ -288,6 +302,17 @@ function ParticipantTrades({
         <label className="flex flex-col gap-1">
           <span className={labelCls}>План выхода</span>
           <input name="exit_plan" defaultValue={q.exit_plan} className={inputCls + " w-44"} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className={labelCls}>Цена входа</span>
+          <input
+            type="number"
+            step={entryPriceStep(q.instrument)}
+            name="entry_price"
+            defaultValue={q.entry_price ?? ""}
+            placeholder="—"
+            className={inputCls + " w-28"}
+          />
         </label>
         <label className="flex flex-col gap-1">
           <span className={labelCls}>Открыта</span>
@@ -500,6 +525,16 @@ function TradesSection({
                 <input name="exit_plan" placeholder="TP 4720 / SL 4650" className={inputCls + " w-44"} />
               </label>
               <label className="flex flex-col gap-1">
+                <span className={labelCls}>Цена входа (необяз.)</span>
+                <input
+                  type="number"
+                  step="any"
+                  name="entry_price"
+                  placeholder="напр. 4670"
+                  className={inputCls + " w-28"}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
                 <span className={labelCls}>Открыта (необяз.)</span>
                 <input type="datetime-local" name="opened_at" className={inputCls} />
               </label>
@@ -508,6 +543,9 @@ function TradesSection({
           )}
           <p className="mt-2 text-[11px] text-muted">
             Плавающий PnL при открытии = 0. Дату можно не указывать — поставится текущая.
+            <br />
+            Если задана цена входа — PnL пересчитывается из текущей цены TwelveData. Если пусто —
+            используется ручное значение PnL ниже.
           </p>
           <Status state={openState} />
         </div>
