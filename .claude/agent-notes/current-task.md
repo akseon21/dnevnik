@@ -1,5 +1,78 @@
 # Текущий статус
 
+## v9 — LIVE-обновление PnL открытых позиций из текущих рыночных цен (2026-05-13)
+
+**Идея:** у открытой позиции добавилось поле `entry_price`. Если задано — нереализованный PnL пересчитывается на лету из текущей рыночной цены TwelveData, без правки админки. Если null — fallback на ручной `unrealized_pnl` (старый поток сохранён, ничего не сломано).
+
+### Что построил
+
+1. **`lib/pnl.ts`** — чистые функции (без сайд-эффектов):
+   - `computeUnrealizedPnlUsd(instrument, side, qty, entryPrice, marketPrice, prices?)` → PnL в USD или null
+   - `contractSize(instrument)` — XAUUSD=100 oz, XAGUSD=5000 oz, BTCUSD=1, остальные мажоры=100 000
+   - `sideSign(side)` — LONG/BUY → +1, SHORT/SELL → −1
+   - `toTwelveData("XAUUSD") → "XAU/USD"` и обратно `fromTwelveData`
+   - USDJPY/USDCHF/USDCAD: PnL в quote → перевод в USD по текущей цене пары
+2. **`lib/pnl.test.ts`** — 19 юнит-тестов, все зелёные. Каждый инструмент: BUY profit / SELL profit / loss + edge cases (null entry/market, синонимы BUY/SELL, маппинг тикеров). Запуск: `npm run test:pnl` (использует `node --test --experimental-strip-types`, без новых deps).
+3. **`app/api/prices/route.ts`** — серверная Next.js route. GET `?symbols=XAUUSD,EURUSD,...`:
+   - Берёт `process.env.TWELVEDATA_API_KEY`. Если нет — отдаёт `{prices:{}, source:"static", error:"..."}`.
+   - Маппит в TwelveData-формат (`XAU/USD`), один батч-запрос на все пары.
+   - In-memory Map-кеш на 30 сек по сортированному ключу запроса.
+   - На ошибку/лимит — отдаёт последний удачный кеш с `stale: true, error: "..."`.
+   - `dynamic = "force-dynamic"` (route не кешируется Next-ом, кеш только наш в Map).
+4. **`app/components/useLivePrices.ts`** — клиентский хук, поллит `/api/prices` каждые `NEXT_PUBLIC_PRICES_REFRESH_MS` мс (дефолт 120000 = 2 мин). Возвращает `{prices, fetchedAt, stale, source, loading, error}`. Защита от race через `reqIdRef`. Если symbols пустой — поллинг не запускается. Lint-чисто (избегаю cascading setState через derived state).
+5. **`lib/types.ts`** — `Position` получил опциональное `entryPrice?: number | null`. Обратная совместимость — старые записи без entryPrice продолжают работать на ручном `unrealizedPnl`.
+6. **`lib/db.ts`** — после основного positions-запроса вторым best-effort запросом подгружает `entry_price` из БД. Если колонки ещё нет (миграция 0004 не прогнана) — try/catch проглатывает, дашборд продолжает работать без live-режима. В основной select добавлен `id` (нужен для маппинга entry_price → позиции).
+7. **`app/components/DashboardShell.tsx`** — главный интегратор:
+   - Собирает уникальные тикеры открытых позиций c entryPrice → `useLivePrices(symbols)`.
+   - Считает `livePnlByPosKey: Map<key, pnl>` и `liveUnrealizedByName: Map<name, sumPnl>`. Фолбэк на `pos.unrealizedPnl` если live-цены ещё нет.
+   - Карточка участника (правая панель) показывает «Текущий счёт» = `balance + liveUnrealized`, цвет зел/красн относительно `startValue`. Под счётом — открытый PnL участника.
+   - Таб «Открытые позиции» переписан на `LivePositionsTable`: колонки Напр./Инструмент/Лот/Вход/Цена/PnL, font-mono, бейдж «бд» если live-цены нет.
+   - Тулбар: индикатор «обновлено N сек назад» (зелёный) / «данные на HH:MM» (красный, при stale) / «загрузка цен...» / «live выкл» (если ключа нет). Title-tooltip с подробностями.
+   - Передаёт `liveUnrealizedByName` в `EquityChart` — режим «По депозиту + нереализ. PnL» теперь использует live-значения.
+   - Передаёт `liveUnrealized/livePnlByPosKey/livePrices` в `ParticipantModal`.
+8. **`app/components/EquityChart.tsx`** — новый опциональный проп `liveUnrealizedByName?: Map<string, number> | null`. В режиме equity — приподнимает последнюю точку линии на live-сумму вместо ручной. Если проп не передан — фолбэк на старое поведение.
+9. **`app/components/ParticipantModal.tsx`** — новые опциональные пропы `liveUnrealized`/`livePnlByPosKey`/`livePrices`. Метрика «Equity» переименована в «Текущий счёт», цвет зел/красн по startValue. В таблице открытых позиций добавлены колонки «Вход» и «Цена», PnL берётся live если есть. Footer «Текущая прибыль/убыток» — live.
+10. **`data/competition.ts`** — у 5 открытых позиций (Кирилл XAUUSD/USDJPY, Алексей XAGUSD, Павел BTCUSD, Lauris GBPUSD) выставлены `entryPrice`, чтобы можно было сразу увидеть live-режим в действии (после установки ключа). Хелпер `open(...)` теперь принимает entryPrice 8-м параметром (default null — обратно совместимо).
+11. **`supabase/migrations/0004_entry_price.sql`** — `ALTER TABLE positions ADD COLUMN IF NOT EXISTS entry_price numeric` + COMMENT. Прогнать через Supabase SQL Editor (если БД подключена).
+12. **`.env.example`** + **`.env.local.example`** — добавлены `TWELVEDATA_API_KEY` и `NEXT_PUBLIC_PRICES_REFRESH_MS` с комментариями где взять ключ.
+13. **`README.md`** — раздел «Live prices (TwelveData)» с пошаговой настройкой, объяснением лимитов, инструкцией по тестам.
+14. **`package.json`** — добавлен скрипт `"test:pnl": "node --test --experimental-strip-types --no-warnings lib/pnl.test.ts"`. Никаких новых production/dev зависимостей.
+
+### Edge cases закрыты
+- **Без TWELVEDATA_API_KEY** — `/api/prices` отдаёт `source:"static"`, prices:{}, дашборд показывает «live выкл», все позиции на ручном `unrealizedPnl` (старая логика).
+- **Старая БД без entry_price** — best-effort запрос ловит ошибку, остальное работает как раньше.
+- **TwelveData упал/лимит** — отдаём последний кеш с `stale:true`, в UI красный индикатор «данные на HH:MM».
+- **Позиция без entryPrice** — фолбэк на ручной `pos.unrealizedPnl`, в строке таблицы бейдж «бд».
+- **Smybols пустой** — хук не запускает поллинг, /api/prices сразу отдаёт пустой объект.
+- **USDJPY/USDCHF/USDCAD** — quote-валюта не USD, формула делит rawPnl на текущую цену пары → корректный USD (тест `USDJPY LONG profit (quote→USD via current rate)`).
+- **Race на смену symbols** — `reqIdRef` отбрасывает устаревшие ответы.
+
+### Валидация v9
+- `npm run lint` — чисто (0 ошибок).
+- `npm run build` — чисто (TS OK). Маршруты: `/` ƒ, `/admin` ƒ, `/api/tickers` ○ 5m, **`/api/prices` ƒ** (новый, dynamic).
+- `npm run test:pnl` — 19/19 pass (формулы по всем инструментам + маппинг тикеров).
+- `npm run dev` (порт 4915) — `/` → 200, `/api/prices?symbols=...` → 200 (`{prices:{}, source:"static", error:"TWELVEDATA_API_KEY is not set"}` без ключа), `/api/prices?symbols=` → 200 (graceful empty).
+
+### Что осталось Кириллу (НЕ делал — по запрету)
+1. Получить бесплатный API-ключ на https://twelvedata.com → положить `TWELVEDATA_API_KEY=...` в `.env.local` (локально) и в Vercel → Project Settings → Environment Variables → Redeploy.
+2. (опц.) Прогнать `supabase/migrations/0004_entry_price.sql` через Supabase SQL Editor — добавит колонку `entry_price` в БД, чтобы её можно было задавать через `/admin`. Без миграции дашборд работает на data/competition.ts (где entryPrice уже проставлены у нескольких позиций).
+3. (опц.) Добавить поле `entry_price` в форму открытия сделки в `/admin/AdminPanel.tsx` — задача не просила, но логично, если соревнование будет вестись через БД.
+4. Ревью + коммит. Suggested commit message: `feat(live-pnl): live unrealized PnL via TwelveData polling`.
+
+### TODO / открытые вопросы
+- **Админка не умеет задавать entry_price** — поле есть в типах и БД (после миграции 0004), но в форме `openTrade` (app/admin/actions.ts + AdminPanel.tsx) его нет. Кирилл может попросить добавить отдельно.
+- **История equity-снапшотов** — задача явно сказала «пока не пишем». Сейчас на графике точка-«сейчас» приподнимается через режим equity, но в historical timeline не сохраняется.
+- **Адаптивный refresh по торговым часам** — реализован НЕ как условный код, а через настраиваемый `NEXT_PUBLIC_PRICES_REFRESH_MS`. По умолчанию 2 мин (720 req/день, безопасно). Если хочется сложнее — можно сделать «1 мин в торговые часы / 5 мин ночью» в `useLivePrices`.
+- **Кросс-курсы для EURJPY и т.п.** — формула возвращает null для незнакомых пар. Если такие инструменты появятся — расширить `computeUnrealizedPnlUsd`.
+
+### Как тестировать
+- **Юнит:** `npm run test:pnl` — 19 кейсов формул и маппинга.
+- **End-to-end (без ключа):** `npm run dev` → `/` → в правой панели у участников с открытыми позициями видно текущий баланс + индикатор «live выкл». Открытые позиции в табе показывают entryPrice / «—» в колонке Цена / ручной PnL c бейджем «бд».
+- **End-to-end (с ключом):** прописать `TWELVEDATA_API_KEY` в `.env.local`, перезапустить dev → раз в 2 мин (или сразу при первом рендере) цены подтянутся, индикатор станет зелёным «обновлено N сек назад», PnL пересчитается, в карточке цвет «Текущий счёт» поменяется в зависимости от того, выше/ниже стартового депозита.
+- **Stale path:** временно подставить заведомо неверный TWELVEDATA_API_KEY → после первого ответа индикатор покраснеет «данные на HH:MM» (если до этого был кеш) или «live выкл».
+
+---
+
 ## v8 — UI: убран бенчмарк, участники в боковую панель, убран таб «О соревновании» (2026-05-12)
 
 Фидбэк пользователя по скриншоту главной.

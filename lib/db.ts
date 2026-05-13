@@ -32,6 +32,7 @@ type ParticipantRow = {
 };
 
 type PositionRow = {
+  id: string;
   participant_id: string;
   side: "LONG" | "SHORT";
   instrument: string;
@@ -79,7 +80,7 @@ export async function getCompetitionData(): Promise<Competition> {
       supabase
         .from("positions")
         .select(
-          "participant_id, side, instrument, lot, exit_plan, margin, unrealized_pnl, realized_pnl, status, opened_at, closed_at",
+          "id, participant_id, side, instrument, lot, exit_plan, margin, unrealized_pnl, realized_pnl, status, opened_at, closed_at",
         )
         .order("opened_at", { ascending: false }),
       supabase
@@ -110,6 +111,23 @@ export async function getCompetitionData(): Promise<Competition> {
     const positionRows = (positionsRes.data ?? []) as PositionRow[];
     const tickerRows = (tickersRes.data ?? []) as TickerRow[];
 
+    // v9 — entry_price тянем отдельным best-effort запросом: если колонки ещё нет
+    // в БД (миграция 0004 не прогнана) — просто пропускаем, дашборд продолжит
+    // работать со старыми ручными PnL без live-расчёта.
+    const entryByPosId = new Map<string, number | null>();
+    try {
+      const epRes = await supabase
+        .from("positions")
+        .select("id, entry_price");
+      if (!epRes.error && Array.isArray(epRes.data)) {
+        for (const r of epRes.data as { id: string; entry_price: number | string | null }[]) {
+          entryByPosId.set(r.id, numOrNull(r.entry_price));
+        }
+      }
+    } catch {
+      // колонки ещё нет — пропускаем без шума
+    }
+
     const participants: Participant[] = participantRows.map((p) => {
       const positions: Position[] = positionRows
         .filter((q) => q.participant_id === p.id)
@@ -124,6 +142,7 @@ export async function getCompetitionData(): Promise<Competition> {
           status: q.status,
           openedAt: q.opened_at,
           closedAt: q.closed_at,
+          entryPrice: entryByPosId.has(q.id) ? entryByPosId.get(q.id) ?? null : null,
         }));
 
       return {

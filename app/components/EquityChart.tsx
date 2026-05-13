@@ -29,6 +29,12 @@ type Props = {
   lines: LineMeta[];
   stats: ParticipantStat[];
   onParticipantClick?: (participantName: string) => void;
+  /**
+   * Live Σ нереализованного PnL по имени участника (из текущих рыночных цен).
+   * Если передана — режим "equity" приподнимает последнюю точку на это значение
+   * вместо ручного s.unrealizedPnl. Если null/undefined — фолбэк на stats.
+   */
+  liveUnrealizedByName?: Map<string, number> | null;
 };
 
 // ── таймфреймы ───────────────────────────────────────────────────────────────
@@ -120,7 +126,13 @@ function tradeTitle(owner: string, pos: Position): string {
 
 const LINE_ANIM_MS = 1100;
 
-export default function EquityChart({ rows, lines, stats, onParticipantClick }: Props) {
+export default function EquityChart({
+  rows,
+  lines,
+  stats,
+  onParticipantClick,
+  liveUnrealizedByName,
+}: Props) {
   const [highlight, setHighlight] = useState<string | null>(null);
   const [tf, setTf] = useState<TimeframeKey>("all");
   const [mode, setMode] = useState<ChartMode>("balance");
@@ -157,15 +169,20 @@ export default function EquityChart({ rows, lines, stats, onParticipantClick }: 
     return m;
   }, [lines]);
 
-  // нереализованный PnL по открытым позициям — по имени участника
+  // нереализованный PnL по открытым позициям — по имени участника.
+  // Если передана live-карта (live PnL из текущих рыночных цен) — используем её,
+  // иначе фолбэк на ручной stats[].unrealizedPnl.
   const unrealizedByName = useMemo(() => {
     const m = new Map<string, number>();
     for (const s of stats) {
-      const has = s.openPositions.some((p) => p.status === "open");
-      if (has && s.unrealizedPnl !== 0) m.set(s.name, s.unrealizedPnl);
+      const hasOpen = s.openPositions.some((p) => p.status === "open");
+      if (!hasOpen) continue;
+      const liveVal = liveUnrealizedByName?.get(s.name);
+      const v = liveVal != null ? liveVal : s.unrealizedPnl;
+      if (v !== 0) m.set(s.name, v);
     }
     return m;
-  }, [stats]);
+  }, [stats, liveUnrealizedByName]);
 
   // режим "equity": клонируем строки и приподнимаем ПОСЛЕДНЮЮ числовую точку
   // каждого участника на сумму его нереализованного PnL.

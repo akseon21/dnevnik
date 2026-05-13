@@ -35,9 +35,21 @@ function SideBadge({ side }: { side: Position["side"] }) {
   );
 }
 
-function OpenPositions({ positions }: { positions: Position[] }) {
+function OpenPositions({
+  positions,
+  participantName,
+  livePnlByPosKey,
+  livePrices,
+}: {
+  positions: Position[];
+  participantName: string;
+  livePnlByPosKey?: Map<string, number> | null;
+  livePrices?: Record<string, number> | null;
+}) {
   if (positions.length === 0)
     return <p className="py-2 text-center text-xs text-muted">Открытых позиций нет</p>;
+  const posKey = (p: Position, idx: number) =>
+    `${participantName}|${p.instrument}|${p.side}|${p.openedAt ?? "?"}|${idx}`;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
@@ -46,20 +58,33 @@ function OpenPositions({ positions }: { positions: Position[] }) {
             <th className="py-1 pr-2 font-medium">Направление</th>
             <th className="py-1 pr-2 font-medium">Инструмент</th>
             <th className="py-1 pr-2 font-medium">Размер лота</th>
+            <th className="py-1 pr-2 font-medium">Вход</th>
+            <th className="py-1 pr-2 font-medium">Цена</th>
             <th className="py-1 pr-2 font-medium">План выхода</th>
             <th className="py-1 text-right font-medium">Нереализ. PnL</th>
           </tr>
         </thead>
         <tbody>
-          {positions.map((p, i) => (
-            <tr key={i} className="border-t border-border/60">
-              <td className="py-1.5 pr-2"><SideBadge side={p.side} /></td>
-              <td className="py-1.5 pr-2 font-semibold text-foreground">{p.instrument}</td>
-              <td className="py-1.5 pr-2 tabular-nums text-muted">{p.lot.toLocaleString("ru-RU")}</td>
-              <td className="py-1.5 pr-2 text-muted">{p.exitPlan || "—"}</td>
-              <td className="py-1.5 text-right"><PnlText value={p.unrealizedPnl} /></td>
-            </tr>
-          ))}
+          {positions.map((p, i) => {
+            const livePnl = livePnlByPosKey?.get(posKey(p, i));
+            const market = livePrices?.[p.instrument.toUpperCase()];
+            const pnl = livePnl != null ? livePnl : p.unrealizedPnl;
+            return (
+              <tr key={i} className="border-t border-border/60">
+                <td className="py-1.5 pr-2"><SideBadge side={p.side} /></td>
+                <td className="py-1.5 pr-2 font-semibold text-foreground">{p.instrument}</td>
+                <td className="py-1.5 pr-2 tabular-nums text-muted">{p.lot.toLocaleString("ru-RU")}</td>
+                <td className="py-1.5 pr-2 tabular-nums text-muted">
+                  {p.entryPrice != null ? p.entryPrice.toLocaleString("ru-RU") : "—"}
+                </td>
+                <td className="py-1.5 pr-2 tabular-nums text-muted">
+                  {market != null ? market.toLocaleString("ru-RU") : p.entryPrice != null ? "…" : "—"}
+                </td>
+                <td className="py-1.5 pr-2 text-muted">{p.exitPlan || "—"}</td>
+                <td className="py-1.5 text-right"><PnlText value={pnl} /></td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -173,9 +198,18 @@ function StatsBlock({ stat }: { stat: ParticipantStat }) {
 export default function ParticipantModal({
   stat,
   onClose,
+  liveUnrealized,
+  livePnlByPosKey,
+  livePrices,
 }: {
   stat: ParticipantStat;
   onClose: () => void;
+  /** Live Σ нереализ. PnL из текущих цен (если доступно). */
+  liveUnrealized?: number | null;
+  /** Live PnL по конкретной открытой позиции (key = participant|instrument|side|openedAt|idx). */
+  livePnlByPosKey?: Map<string, number> | null;
+  /** Текущие цены инструментов (для отображения «Цена» в строке). */
+  livePrices?: Record<string, number> | null;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -246,18 +280,30 @@ export default function ParticipantModal({
           </button>
         </div>
 
-        {/* баланс / equity / свободные средства — всё вычислено из сделок */}
-        <div className="mb-4 grid grid-cols-3 gap-2">
-          <Metric label="Баланс">
-            <span className="tabular-nums">{formatMoney(stat.balance)}</span>
-          </Metric>
-          <Metric label="Equity">
-            <span className="tabular-nums">{formatMoney(stat.equity)}</span>
-          </Metric>
-          <Metric label="Свободные средства">
-            <span className="tabular-nums">{formatMoney(stat.availableCash)}</span>
-          </Metric>
-        </div>
+        {/* баланс / equity / свободные средства — equity использует live PnL если есть */}
+        {(() => {
+          const effUnrealized = liveUnrealized != null ? liveUnrealized : stat.unrealizedPnl;
+          const effEquity = stat.balance + effUnrealized;
+          const equityCls =
+            effEquity > stat.startValue
+              ? "text-pos"
+              : effEquity < stat.startValue
+                ? "text-neg"
+                : "tabular-nums";
+          return (
+            <div className="mb-4 grid grid-cols-3 gap-2">
+              <Metric label="Баланс">
+                <span className="tabular-nums">{formatMoney(stat.balance)}</span>
+              </Metric>
+              <Metric label="Текущий счёт">
+                <span className={`tabular-nums ${equityCls}`}>{formatMoney(effEquity)}</span>
+              </Metric>
+              <Metric label="Свободные средства">
+                <span className="tabular-nums">{formatMoney(stat.availableCash)}</span>
+              </Metric>
+            </div>
+          );
+        })()}
 
         {/* статистика */}
         <StatsBlock stat={stat} />
@@ -267,11 +313,16 @@ export default function ParticipantModal({
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
             Открытые позиции
           </h3>
-          <OpenPositions positions={stat.openPositions} />
+          <OpenPositions
+            positions={stat.openPositions}
+            participantName={stat.name}
+            livePnlByPosKey={livePnlByPosKey}
+            livePrices={livePrices}
+          />
           {stat.openPositions.length > 0 && (
             <div className="mt-1.5 flex justify-end text-xs">
               <span className="text-muted">Текущая прибыль/убыток:&nbsp;</span>
-              <PnlText value={stat.unrealizedPnl} />
+              <PnlText value={liveUnrealized != null ? liveUnrealized : stat.unrealizedPnl} />
             </div>
           )}
         </section>

@@ -22,6 +22,10 @@ export type Position = {
   status: "open" | "closed"; // открытая / закрытая
   openedAt?: string | null; // ISO-таймстамп открытия
   closedAt?: string | null; // ISO-таймстамп закрытия (для закрытых)
+  // v9 — live-PnL: цена входа в сделку. Если задана — нереализ. PnL пересчитывается
+  // на лету из текущей рыночной цены (см. lib/pnl.ts + /api/prices). Если null —
+  // используется ручной unrealizedPnl (старый поток админки сохраняется).
+  entryPrice?: number | null;
 };
 
 /** PnL сделки в текущем виде: для закрытой — realizedPnl, для открытой — unrealizedPnl. */

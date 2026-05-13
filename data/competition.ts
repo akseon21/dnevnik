@@ -31,6 +31,7 @@ const open = (
   margin: number,
   unrealizedPnl: number,
   openedAt: string,
+  entryPrice: number | null = null,
 ): Position => ({
   side,
   instrument,
@@ -42,6 +43,7 @@ const open = (
   status: "open",
   openedAt,
   closedAt: null,
+  entryPrice,
 });
 
 const closed = (
@@ -90,8 +92,8 @@ export const competition: Competition = {
         closed("SHORT", "GBPUSD", 0.3, "TP 1.2680 / SL 1.2820", 200, -45, "2026-05-15T09:00", "2026-05-16T12:00"),
         closed("LONG", "XAUUSD", 0.3, "TP 4690 / SL 4600", 280, 180, "2026-05-16T10:00", "2026-05-17T15:00"),
         closed("LONG", "XAGUSD", 0.5, "TP 59.0 / SL 57.0", 160, 75, "2026-05-18T10:00", "2026-05-18T17:00"),
-        open("LONG", "XAUUSD", 0.5, "TP 4720 / SL 4650", 300, 145, "2026-05-19T11:00"),
-        open("SHORT", "USDJPY", 0.3, "TP 151.20 / SL 153.10", 180, -42, "2026-05-19T09:30"),
+        open("LONG", "XAUUSD", 0.5, "TP 4720 / SL 4650", 300, 145, "2026-05-19T11:00", 4670.0),
+        open("SHORT", "USDJPY", 0.3, "TP 151.20 / SL 153.10", 180, -42, "2026-05-19T09:30", 152.10),
       ],
     },
     {
@@ -103,7 +105,7 @@ export const competition: Competition = {
         closed("SHORT", "BTCUSD", 0.1, "TP 70000 / SL 73000", 400, -20, "2026-05-13T11:00", "2026-05-14T18:00"),
         closed("LONG", "EURUSD", 0.5, "TP 1.0960 / SL 1.0860", 250, 95, "2026-05-15T10:00", "2026-05-16T16:00"),
         closed("LONG", "XAUUSD", 0.4, "TP 4700 / SL 4620", 300, 205, "2026-05-17T10:00", "2026-05-18T14:00"),
-        open("LONG", "XAGUSD", 1.0, "TP 59.50 / SL 57.40", 320, 64, "2026-05-19T10:15"),
+        open("LONG", "XAGUSD", 1.0, "TP 59.50 / SL 57.40", 320, 64, "2026-05-19T10:15", 57.50),
       ],
     },
     {
@@ -115,7 +117,7 @@ export const competition: Competition = {
         closed("LONG", "GBPUSD", 0.4, "TP 1.2850 / SL 1.2680", 220, -65, "2026-05-13T10:30", "2026-05-14T15:00"),
         closed("SHORT", "XAUUSD", 0.3, "TP 4600 / SL 4700", 260, -40, "2026-05-15T11:00", "2026-05-16T13:00"),
         closed("LONG", "EURUSD", 0.5, "TP 1.0980 / SL 1.0880", 250, -80, "2026-05-17T09:00", "2026-05-18T11:00"),
-        open("SHORT", "BTCUSD", 0.1, "TP 68000 / SL 73500", 350, -85, "2026-05-18T14:00"),
+        open("SHORT", "BTCUSD", 0.1, "TP 68000 / SL 73500", 350, -85, "2026-05-18T14:00", 70400),
       ],
     },
     {
@@ -127,7 +129,7 @@ export const competition: Competition = {
         closed("LONG", "XAGUSD", 0.6, "TP 59.0 / SL 57.0", 200, 70, "2026-05-13T10:00", "2026-05-14T17:00"),
         closed("LONG", "XAUUSD", 0.3, "TP 4690 / SL 4600", 280, 210, "2026-05-14T10:00", "2026-05-16T15:00"),
         closed("SHORT", "USDJPY", 0.4, "TP 150.50 / SL 153.50", 230, -45, "2026-05-17T10:00", "2026-05-18T12:00"),
-        open("LONG", "GBPUSD", 0.6, "TP 1.2850 / SL 1.2680", 240, -35, "2026-05-19T08:00"),
+        open("LONG", "GBPUSD", 0.6, "TP 1.2850 / SL 1.2680", 240, -35, "2026-05-19T08:00", 1.2792),
       ],
     },
     {

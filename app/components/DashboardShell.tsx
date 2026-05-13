@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import EquityChart from "./EquityChart";
 import ParticipantModal from "./ParticipantModal";
 import Countdown from "./Countdown";
 import Sparkline from "./Sparkline";
+import { useLivePrices } from "./useLivePrices";
 import {
   formatMoney,
   formatPct,
@@ -15,6 +16,7 @@ import {
   type ParticipantStat,
 } from "@/lib/standings";
 import { positionPnl, type Position } from "@/lib/types";
+import { computeUnrealizedPnlUsd } from "@/lib/pnl";
 
 type LineMeta = { name: string; color: string };
 
@@ -130,13 +132,83 @@ function PositionsTable({
   );
 }
 
+function LivePositionsTable({
+  rows,
+}: {
+  rows: { pos: Position; pnl: number; isLive: boolean; marketPrice: number | null }[];
+}) {
+  if (rows.length === 0) {
+    return <p className="py-3 text-center text-xs text-muted">Открытых позиций нет</p>;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full font-mono text-[11px]">
+        <thead>
+          <tr className="text-left text-[10px] uppercase tracking-wider text-muted">
+            <th className="py-1 pr-2 font-medium">Напр.</th>
+            <th className="py-1 pr-2 font-medium">Инструмент</th>
+            <th className="py-1 pr-2 font-medium">Лот</th>
+            <th className="py-1 pr-2 font-medium">Вход</th>
+            <th className="py-1 pr-2 font-medium">Цена</th>
+            <th className="py-1 text-right font-medium">PnL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} className="border-t border-border/60">
+              <td className="py-1.5 pr-2">
+                <SideBadge side={row.pos.side} />
+              </td>
+              <td className="py-1.5 pr-2 font-semibold text-foreground">
+                {row.pos.instrument}
+              </td>
+              <td className="py-1.5 pr-2 tabular-nums text-muted">
+                {row.pos.lot.toLocaleString("ru-RU")}
+              </td>
+              <td className="py-1.5 pr-2 tabular-nums text-muted">
+                {row.pos.entryPrice != null
+                  ? row.pos.entryPrice.toLocaleString("ru-RU")
+                  : "—"}
+              </td>
+              <td className="py-1.5 pr-2 tabular-nums text-muted">
+                {row.marketPrice != null
+                  ? row.marketPrice.toLocaleString("ru-RU")
+                  : row.pos.entryPrice != null
+                    ? "…"
+                    : "—"}
+              </td>
+              <td className="py-1.5 text-right">
+                <PnlText value={row.pnl} />
+                {!row.isLive && row.pos.entryPrice != null && (
+                  <span className="ml-1 text-[9px] uppercase text-muted/60" title="нет live-цены, показан ручной PnL из БД">
+                    бд
+                  </span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ParticipantCard({
   s,
   onClick,
+  liveEquity,
+  liveUnrealized,
+  hasLive,
 }: {
   s: ParticipantStat;
   onClick: () => void;
+  liveEquity: number; // = s.balance + (live unrealized || s.unrealizedPnl)
+  liveUnrealized: number; // Σ live PnL открытых
+  hasLive: boolean; // true если хоть для одной открытой позиции есть live-цена
 }) {
+  // «Текущий счёт»: цвет относительно стартового депозита.
+  const equityCls =
+    liveEquity >= s.startValue ? "text-pos" : "text-neg";
   return (
     <button
       type="button"
@@ -153,16 +225,37 @@ function ParticipantCard({
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
         <span className="truncate text-xs font-semibold text-foreground">{s.name}</span>
         <span className="flex items-baseline gap-1.5">
-          <span className="tabular-nums text-xs text-foreground">
-            {formatMoney(s.currentValue)}
+          <span className={`tabular-nums text-xs ${hasLive ? equityCls : "text-foreground"}`}>
+            {formatMoney(hasLive ? liveEquity : s.currentValue)}
           </span>
           <span className="text-[10px]">
             <ChangeText value={s.changePct} />
           </span>
         </span>
+        {hasLive && s.openPositions.length > 0 && (
+          <span className="text-[10px] text-muted">
+            <span>откр. PnL </span>
+            <PnlText value={liveUnrealized} />
+          </span>
+        )}
       </span>
       <Sparkline timeline={s.timeline} color={s.color} className="shrink-0" />
     </button>
+  );
+}
+
+// ── live-PnL: построение карт по позициям и участникам ───────────────────────
+// Уникальный ключ позиции — для маппинга live-PnL обратно в UI.
+function positionKey(participantName: string, pos: Position, idx: number): string {
+  return `${participantName}|${pos.instrument}|${pos.side}|${pos.openedAt ?? "?"}|${idx}`;
+}
+
+function isPositionLiveable(pos: Position): boolean {
+  return (
+    pos.status === "open" &&
+    pos.entryPrice != null &&
+    Number.isFinite(pos.entryPrice) &&
+    pos.entryPrice > 0
   );
 }
 
@@ -187,6 +280,91 @@ export default function DashboardShell({
   const shownLines = lines.filter((l) => visible(l.name));
   const modalStat = stats.find((s) => s.name === modalName) ?? null;
 
+  // ── Live prices: уникальные тикеры открытых позиций c entryPrice ──────────
+  const liveSymbols = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of stats) {
+      for (const pos of s.openPositions) {
+        if (isPositionLiveable(pos)) set.add(pos.instrument.toUpperCase());
+        // Для USDxxx-пар (USDJPY/USDCHF/USDCAD) кросс-курс = цена самой пары,
+        // отдельных кросс-тикеров не нужно.
+      }
+    }
+    return [...set];
+  }, [stats]);
+
+  const live = useLivePrices(liveSymbols);
+  const livePrices = live.prices;
+
+  // Live PnL по позициям и Σ live PnL по участникам.
+  // Если live-цены для инструмента ещё нет (loading / source=static / нет ключа) —
+  // фолбэк на ручной pos.unrealizedPnl, чтобы UI не «прыгал» в ноль.
+  const { livePnlByPosKey, liveUnrealizedByName, liveCoverageByName } = useMemo(() => {
+    const byPos = new Map<string, number>();
+    const byName = new Map<string, number>();
+    const coverage = new Map<string, { live: number; total: number }>(); // сколько позиций с live-ценой / всего открытых
+    for (const s of stats) {
+      let sum = 0;
+      let liveCount = 0;
+      const totalOpen = s.openPositions.length;
+      s.openPositions.forEach((pos, idx) => {
+        const key = positionKey(s.name, pos, idx);
+        if (isPositionLiveable(pos)) {
+          const market = livePrices[pos.instrument.toUpperCase()];
+          const pnl = computeUnrealizedPnlUsd(
+            pos.instrument,
+            pos.side,
+            pos.lot,
+            pos.entryPrice ?? null,
+            market ?? null,
+            livePrices,
+          );
+          if (pnl != null) {
+            byPos.set(key, pnl);
+            sum += pnl;
+            liveCount++;
+            return;
+          }
+        }
+        // фолбэк — ручной PnL из БД
+        byPos.set(key, pos.unrealizedPnl);
+        sum += pos.unrealizedPnl;
+      });
+      byName.set(s.name, sum);
+      coverage.set(s.name, { live: liveCount, total: totalOpen });
+    }
+    return { livePnlByPosKey: byPos, liveUnrealizedByName: byName, liveCoverageByName: coverage };
+  }, [stats, livePrices]);
+
+  // Тикер «обновлено N сек назад»
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 5_000);
+    return () => clearInterval(id);
+  }, []);
+  const fetchedMs = live.fetchedAt ? new Date(live.fetchedAt).getTime() : null;
+  const ageSec = fetchedMs ? Math.max(0, Math.floor((nowMs - fetchedMs) / 1000)) : null;
+
+  function ageLabel(): string {
+    if (ageSec == null) return "—";
+    if (ageSec < 60) return `${ageSec} сек назад`;
+    const m = Math.floor(ageSec / 60);
+    if (m < 60) return `${m} мин назад`;
+    const h = Math.floor(m / 60);
+    return `${h} ч назад`;
+  }
+
+  function fetchedLabel(): string {
+    if (!live.fetchedAt) return "";
+    const d = new Date(live.fetchedAt);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+
+  const hasAnyLiveTarget = liveSymbols.length > 0;
+  const hasAnyLivePrice = Object.keys(livePrices).length > 0;
+
   function toggle(name: string) {
     setSelected((cur) =>
       cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name],
@@ -199,10 +377,39 @@ export default function DashboardShell({
 
   return (
     <>
-      {/* ─── Тулбар: пометка + отсчёт + фильтр участников ─── */}
+      {/* ─── Тулбар: пометка + live-статус + отсчёт + фильтр участников ─── */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-[11px] text-muted">📊 {note}</span>
         <div className="flex items-center gap-2">
+          {hasAnyLiveTarget && (
+            <span
+              className={`flex items-center gap-1 rounded-md border border-border bg-panel px-2 py-1 text-[10px] tabular-nums ${
+                live.stale ? "text-neg" : hasAnyLivePrice ? "text-pos" : "text-muted"
+              }`}
+              title={
+                live.stale
+                  ? `Данные на момент ${fetchedLabel()} (источник цен недоступен${
+                      live.error ? `: ${live.error}` : ""
+                    })`
+                  : hasAnyLivePrice
+                    ? `Live-цены TwelveData. Обновлено ${ageLabel()}`
+                    : "Жду первое обновление цен..."
+              }
+            >
+              <span
+                className={`inline-block h-1.5 w-1.5 rounded-full ${
+                  live.stale ? "bg-neg" : hasAnyLivePrice ? "bg-pos" : "bg-muted"
+                }`}
+              />
+              {hasAnyLivePrice
+                ? live.stale
+                  ? `данные на ${fetchedLabel()}`
+                  : `обновлено ${ageLabel()}`
+                : live.loading
+                  ? "загрузка цен..."
+                  : "live выкл"}
+            </span>
+          )}
           <Countdown startDate={startDate} endDate={endDate} />
           <div className="relative">
             <button
@@ -268,6 +475,7 @@ export default function DashboardShell({
               lines={shownLines}
               stats={shownStats}
               onParticipantClick={(name) => setModalName(name)}
+              liveUnrealizedByName={liveUnrealizedByName}
             />
           )}
         </section>
@@ -297,9 +505,21 @@ export default function DashboardShell({
             {shownStats.length === 0 ? (
               <p className="py-3 text-center text-xs text-muted">Никого не выбрано</p>
             ) : (
-              shownStats.map((s) => (
-                <ParticipantCard key={s.name} s={s} onClick={() => setModalName(s.name)} />
-              ))
+              shownStats.map((s) => {
+                const liveUnrealized = liveUnrealizedByName.get(s.name) ?? s.unrealizedPnl;
+                const cov = liveCoverageByName.get(s.name);
+                const hasLive = !!cov && cov.live > 0;
+                return (
+                  <ParticipantCard
+                    key={s.name}
+                    s={s}
+                    onClick={() => setModalName(s.name)}
+                    liveEquity={s.balance + liveUnrealized}
+                    liveUnrealized={liveUnrealized}
+                    hasLive={hasLive}
+                  />
+                );
+              })
             )}
           </div>
         </aside>
@@ -309,52 +529,64 @@ export default function DashboardShell({
       <section>
         {tab === "open" && (
           <div className="grid gap-3 sm:grid-cols-2">
-            {shownStats.map((s) => (
-              <div
-                key={s.name}
-                className="rounded-lg border border-border bg-panel p-3"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setModalName(s.name)}
-                    className="flex items-center gap-2 text-left hover:opacity-80"
-                  >
-                    <span
-                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
-                      style={{ borderColor: s.color, color: s.color }}
+            {shownStats.map((s) => {
+              const liveUnrealized = liveUnrealizedByName.get(s.name) ?? s.unrealizedPnl;
+              return (
+                <div
+                  key={s.name}
+                  className="rounded-lg border border-border bg-panel p-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setModalName(s.name)}
+                      className="flex items-center gap-2 text-left hover:opacity-80"
                     >
-                      {initials(s.name)}
-                    </span>
-                    <span className="text-sm font-semibold text-foreground">{s.name}</span>
-                  </button>
-                  {s.openPositions.length > 0 ? (
-                    <span className="text-xs">
-                      <span className="text-muted">PnL: </span>
-                      <PnlText value={s.unrealizedPnl} />
-                    </span>
-                  ) : (
-                    <span className="text-xs">
-                      <span className="tabular-nums text-foreground">
-                        {formatMoney(s.currentValue)}
-                      </span>{" "}
-                      <ChangeText value={s.changePct} />
-                    </span>
-                  )}
-                </div>
-                {s.openPositions.length > 0 && (
-                  <div className="mt-2">
-                    <PositionsTable positions={s.openPositions.map((pos) => ({ pos }))} />
+                      <span
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold"
+                        style={{ borderColor: s.color, color: s.color }}
+                      >
+                        {initials(s.name)}
+                      </span>
+                      <span className="text-sm font-semibold text-foreground">{s.name}</span>
+                    </button>
+                    {s.openPositions.length > 0 ? (
+                      <span className="text-xs">
+                        <span className="text-muted">PnL: </span>
+                        <PnlText value={liveUnrealized} />
+                      </span>
+                    ) : (
+                      <span className="text-xs">
+                        <span className="tabular-nums text-foreground">
+                          {formatMoney(s.currentValue)}
+                        </span>{" "}
+                        <ChangeText value={s.changePct} />
+                      </span>
+                    )}
                   </div>
-                )}
-                <div className="mt-2 flex justify-end border-t border-border/60 pt-2 text-xs">
-                  <span className="text-muted">Свободные средства:&nbsp;</span>
-                  <span className="tabular-nums text-foreground">
-                    {formatMoney(s.availableCash)}
-                  </span>
+                  {s.openPositions.length > 0 && (
+                    <div className="mt-2">
+                      <LivePositionsTable
+                        rows={s.openPositions.map((pos, idx) => ({
+                          pos,
+                          pnl: livePnlByPosKey.get(positionKey(s.name, pos, idx)) ?? pos.unrealizedPnl,
+                          isLive:
+                            isPositionLiveable(pos) &&
+                            livePrices[pos.instrument.toUpperCase()] != null,
+                          marketPrice: livePrices[pos.instrument.toUpperCase()] ?? null,
+                        }))}
+                      />
+                    </div>
+                  )}
+                  <div className="mt-2 flex justify-end border-t border-border/60 pt-2 text-xs">
+                    <span className="text-muted">Свободные средства:&nbsp;</span>
+                    <span className="tabular-nums text-foreground">
+                      {formatMoney(s.availableCash)}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -369,7 +601,13 @@ export default function DashboardShell({
       </section>
 
       {modalStat && (
-        <ParticipantModal stat={modalStat} onClose={() => setModalName(null)} />
+        <ParticipantModal
+          stat={modalStat}
+          onClose={() => setModalName(null)}
+          liveUnrealized={liveUnrealizedByName.get(modalStat.name) ?? null}
+          livePnlByPosKey={livePnlByPosKey}
+          livePrices={livePrices}
+        />
       )}
     </>
   );
